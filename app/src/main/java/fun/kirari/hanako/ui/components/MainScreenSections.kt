@@ -2,34 +2,40 @@ package `fun`.kirari.hanako.ui.components
 
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
@@ -52,117 +59,285 @@ import kotlinx.coroutines.delay
 @Composable
 fun HeroSection(
     overlayEnabled: Boolean,
+    route: ProcessingRoute,
+    onSelectRoute: (ProcessingRoute) -> Unit,
     onOpenOverlayPermission: () -> Unit,
     onToggleOverlay: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
+    val hasOverlayPermission = Settings.canDrawOverlays(context)
+
     Surface(
-        shape = RoundedCornerShape(32.dp),
-        color = MaterialTheme.colorScheme.primaryContainer,
-        shadowElevation = 0.dp
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+        tonalElevation = 2.dp
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .animateContentSize(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessLow
-                    )
-                )
+                .animateContentSize()
                 .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
+            // 头部：应用信息与精致的运行状态标签
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.1f),
-                    modifier = Modifier.size(48.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (overlayEnabled) Icons.Default.Stop else Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(32.dp)
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.1f),
+                        modifier = Modifier.size(52.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    }
+                    Column {
+                        Text(
+                            "Hanako AI",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            "屏幕智能助理",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
                         )
                     }
                 }
-                Column {
-                    Text(
-                        "Hanako 截图助手",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        if (overlayEnabled) "悬浮球正在运行" else "悬浮球已停止",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                    )
+
+                // 胶囊状态指示器
+                val statusContainerColor = if (overlayEnabled) {
+                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f)
+                } else {
+                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.05f)
+                }
+                val statusDotColor = if (overlayEnabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                }
+                Surface(
+                    shape = CircleShape,
+                    color = statusContainerColor,
+                    border = if (overlayEnabled) BorderStroke(1.dp, MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.2f)) else null
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(statusDotColor)
+                        )
+                        Text(
+                            if (overlayEnabled) "运行中" else "已停止",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
             }
 
-            Text(
-                "通过悬浮球快速捕捉屏幕内容，支持 OCR 识别与多模态模型对话，助你高效处理屏幕信息。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-            )
+            // 工作模式区域 (替换掉原本丑陋的 SegmentedButtonRow)
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "工作模式",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    ProcessingRoute.entries.forEach { item ->
+                        val isSelected = route == item
+                        ModeSelectorItem(
+                            modifier = Modifier.weight(1f),
+                            title = if (item == ProcessingRoute.OCR_THEN_LLM) "OCR 模式" else "多模态视觉",
+                            subtitle = if (item == ProcessingRoute.OCR_THEN_LLM) "提取文字后分析" else "直接分析全屏幕",
+                            icon = if (item == ProcessingRoute.OCR_THEN_LLM) Icons.Default.Language else Icons.Default.AutoAwesome,
+                            isSelected = isSelected,
+                            onClick = { onSelectRoute(item) }
+                        )
+                    }
+                }
+            }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.1f))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // 底部操作按钮群
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = onOpenOverlayPermission,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.25f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text("权限设置", fontWeight = FontWeight.Medium)
+                    }
+
+                    val buttonColor = if (overlayEnabled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onPrimaryContainer
+                    val buttonTextColor = if (overlayEnabled) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.primaryContainer
+
+                    Button(
+                        onClick = {
+                            onToggleOverlay(!overlayEnabled && hasOverlayPermission)
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = hasOverlayPermission,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = buttonColor,
+                            contentColor = buttonTextColor
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (overlayEnabled) Icons.Default.Stop else Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text(if (overlayEnabled) "关闭" else "启动", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // 提示区域
+                if (!hasOverlayPermission) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                "核心提示：请先开启悬浮窗权限以激活功能",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !overlayEnabled) {
+                    Text(
+                        "💡 提示：Android 14+ 系统在首次智能识屏时会弹出截屏授权，请选择允许。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 优雅的独立分立式模式选择卡片
+ */
+@Composable
+fun ModeSelectorItem(
+    modifier: Modifier = Modifier,
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val containerColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.05f),
+        label = "containerColor"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+        label = "contentColor"
+    )
+    val borderDp by animateDpAsState(
+        targetValue = if (isSelected) 0.dp else 1.dp,
+        label = "borderDp"
+    )
+
+    Surface(
+        modifier = modifier
+            .height(96.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable { onClick() },
+        shape = RoundedCornerShape(18.dp),
+        color = containerColor,
+        border = if (borderDp > 0.dp) BorderStroke(borderDp, MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.1f)) else null
+    ) {
+        Box(modifier = Modifier.padding(12.dp)) {
+            Column(
+                modifier = Modifier.align(Alignment.TopStart),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                OutlinedButton(
-                    onClick = onOpenOverlayPermission,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text("权限设置")
-                }
-                Button(
-                    onClick = {
-                        val canOverlay = Settings.canDrawOverlays(context)
-                        onToggleOverlay(!overlayEnabled && canOverlay)
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = Settings.canDrawOverlays(context),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Text(if (overlayEnabled) "停止助手" else "启动助手")
-                }
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = contentColor.copy(alpha = if (isSelected) 1f else 0.8f),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor.copy(alpha = 0.65f),
+                    maxLines = 1
+                )
             }
 
-            if (!Settings.canDrawOverlays(context)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                    Text(
-                        "需要开启悬浮窗权限以使用功能",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !overlayEnabled) {
-                Text(
-                    "注意：启动助手后，截图时系统会请求屏幕捕捉授权。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .align(Alignment.TopEnd)
                 )
             }
         }
@@ -175,18 +350,30 @@ fun RouteSection(
     onSelect: (ProcessingRoute) -> Unit
 ) {
     SectionCard(title = "工作模式") {
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            ProcessingRoute.entries.forEachIndexed { index, item ->
-                SegmentedButton(
-                    selected = route == item,
-                    onClick = { onSelect(item) },
-                    shape = SegmentedButtonDefaults.itemShape(index, ProcessingRoute.entries.size),
-                    icon = {}
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            ProcessingRoute.entries.forEach { item ->
+                val isSelected = route == item
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(64.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onSelect(item) },
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    border = if (isSelected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null
                 ) {
-                    Text(
-                        if (item == ProcessingRoute.OCR_THEN_LLM) "OCR 增强" else "视觉直达",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            if (item == ProcessingRoute.OCR_THEN_LLM) "OCR+语言模型" else "多模态模型",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
         }
@@ -195,54 +382,27 @@ fun RouteSection(
 
 @Composable
 fun AssistantSelector(
-    assistants: List<AssistantPreset>,
-    selectedId: String?,
-    onSelect: (String) -> Unit,
+    assistant: AssistantPreset,
     onChange: (AssistantPreset) -> Unit,
-    onAdd: () -> Unit
 ) {
     Column(
         modifier = Modifier.animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                assistants.forEach {
-                    FilterChip(
-                        selected = it.id == selectedId,
-                        onClick = { onSelect(it.id) },
-                        label = { Text(it.name) },
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                }
-            }
-            TextButton(onClick = onAdd) {
-                Text("新增")
-            }
-        }
-        assistants.firstOrNull { it.id == selectedId }?.let { selected ->
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                DraftOutlinedTextField(
-                    fieldKey = "${selected.id}:name",
-                    value = selected.name,
-                    onCommit = { onChange(selected.copy(name = it)) },
-                    label = "助手名称"
-                )
-                DraftOutlinedTextField(
-                    fieldKey = "${selected.id}:systemPrompt",
-                    value = selected.systemPrompt,
-                    onCommit = { onChange(selected.copy(systemPrompt = it)) },
-                    label = "角色设定与提示词",
-                    minLines = 5
-                )
-            }
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            DraftOutlinedTextField(
+                fieldKey = "${assistant.id}:name",
+                value = assistant.name,
+                onCommit = { onChange(assistant.copy(name = it)) },
+                label = "助手名称"
+            )
+            DraftOutlinedTextField(
+                fieldKey = "${assistant.id}:systemPrompt",
+                value = assistant.systemPrompt,
+                onCommit = { onChange(assistant.copy(systemPrompt = it)) },
+                label = "角色设定与提示词",
+                minLines = 5
+            )
         }
     }
 }
@@ -298,13 +458,13 @@ fun SectionCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp)
+            .padding(vertical = 6.dp)
     ) {
         Text(
             title,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
             color = MaterialTheme.colorScheme.primary
         )
         Surface(
@@ -315,8 +475,8 @@ fun SectionCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 content()
             }

@@ -1,18 +1,22 @@
 package `fun`.kirari.hanako.ui
 
-import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,43 +25,71 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import `fun`.kirari.hanako.capture.MediaProjectionForegroundService
 import `fun`.kirari.hanako.capture.ProjectionPermissionActivity
+import `fun`.kirari.hanako.capture.ProjectionSessionManager
+import `fun`.kirari.hanako.data.ModelPurpose
+import `fun`.kirari.hanako.data.ModelSelection
+import `fun`.kirari.hanako.data.displayName
+import `fun`.kirari.hanako.data.modelSelectionFor
+import `fun`.kirari.hanako.data.normalize
+import `fun`.kirari.hanako.data.resolveModelName
+import `fun`.kirari.hanako.data.resolveModelProvider
 import `fun`.kirari.hanako.overlay.MarkdownLatexText
 import `fun`.kirari.hanako.overlay.OverlayService
 import `fun`.kirari.hanako.ui.components.AssistantSelector
 import `fun`.kirari.hanako.ui.components.CustomModelDialog
 import `fun`.kirari.hanako.ui.components.HeroSection
 import `fun`.kirari.hanako.ui.components.ModelPickerDialog
+import `fun`.kirari.hanako.ui.components.ModelButtonField
 import `fun`.kirari.hanako.ui.components.ProviderEditor
-import `fun`.kirari.hanako.ui.components.ProviderModelTarget
 import `fun`.kirari.hanako.ui.components.RouteSection
 import `fun`.kirari.hanako.ui.components.SectionCard
 
@@ -66,130 +98,221 @@ enum class Screen(val title: String, val icon: ImageVector) {
     Settings("设置", Icons.Default.Settings)
 }
 
+private const val ROUTE_SETTINGS_MENU = "settings_menu"
+private const val ROUTE_SETTINGS_PROVIDER = "settings_provider"
+private const val ROUTE_SETTINGS_PROVIDER_DETAIL = "settings_provider_detail"
+private const val ROUTE_SETTINGS_MODEL = "settings_model"
+private const val ROUTE_SETTINGS_ASSISTANT = "settings_assistant"
+private const val ROUTE_SETTINGS_ASSISTANT_DETAIL = "settings_assistant_detail"
+private const val ARG_PROVIDER_ID = "providerId"
+private const val ARG_ASSISTANT_ID = "assistantId"
+
+private fun providerDetailRoute(providerId: String): String = "$ROUTE_SETTINGS_PROVIDER_DETAIL/$providerId"
+private fun assistantDetailRoute(assistantId: String): String = "$ROUTE_SETTINGS_ASSISTANT_DETAIL/$assistantId"
+
+private fun settingsTitle(route: String?): String = when (route) {
+    ROUTE_SETTINGS_PROVIDER -> "模型提供方"
+    ROUTE_SETTINGS_MODEL -> "模型设置"
+    ROUTE_SETTINGS_ASSISTANT -> "助手配置"
+    null -> "设置"
+    else -> when {
+        route.startsWith("$ROUTE_SETTINGS_PROVIDER_DETAIL/") -> "编辑提供方"
+        route.startsWith("$ROUTE_SETTINGS_ASSISTANT_DETAIL/") -> "编辑助手"
+        else -> "设置"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HanakoApp(viewModel: MainViewModel) {
     val settings by viewModel.settings.collectAsState()
     val context = LocalContext.current
-    val permissionLauncher = rememberLauncherForActivityResult(StartActivityForResult()) { result ->
-        viewModel.setOverlayEnabled(result.resultCode == Activity.RESULT_OK)
-    }
-    val selectedProvider = settings.providers.firstOrNull { it.id == settings.selectedProviderId }
+    val overlayEnabled by ProjectionSessionManager.sessionActive.collectAsState()
     val selectedAssistant = settings.assistants.firstOrNull { it.id == settings.selectedAssistantId }
-    var modelPickerTarget by remember { mutableStateOf<ProviderModelTarget?>(null) }
-    var customModelTarget by remember { mutableStateOf<ProviderModelTarget?>(null) }
+    var providerModelsPreviewId by remember { mutableStateOf<String?>(null) }
+    var modelPickerTarget by remember { mutableStateOf<ModelPurpose?>(null) }
+    var customModelTarget by remember { mutableStateOf<ModelPurpose?>(null) }
     var customModelDialogTitle by remember { mutableStateOf<String?>(null) }
-    
-    var currentScreen by remember { mutableStateOf(Screen.Hanako) }
+    var providerPickerTarget by remember { mutableStateOf<ModelPurpose?>(null) }
+    var modelPickerProviderId by remember { mutableStateOf<String?>(null) }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text(currentScreen.title) },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = androidx.compose.ui.graphics.Color.Transparent
+    var currentScreen by rememberSaveable { mutableStateOf(Screen.Hanako) }
+
+    val settingsNavController = rememberNavController()
+    val settingsBackStackEntry by settingsNavController.currentBackStackEntryAsState()
+    val settingsRoute = settingsBackStackEntry?.destination?.route
+    val inSettingsSubPage = settingsRoute != null && settingsRoute != ROUTE_SETTINGS_MENU
+    val pagerState = rememberPagerState(
+        initialPage = currentScreen.ordinal,
+        pageCount = { Screen.entries.size }
+    )
+
+    BackHandler(enabled = currentScreen == Screen.Settings && !inSettingsSubPage) {
+        currentScreen = Screen.Hanako
+    }
+
+    LaunchedEffect(currentScreen) {
+        if (pagerState.targetPage != currentScreen.ordinal && pagerState.currentPage != currentScreen.ordinal) {
+            pagerState.animateScrollToPage(currentScreen.ordinal)
+        }
+    }
+
+    LaunchedEffect(pagerState.settledPage) {
+        val settledScreen = Screen.entries[pagerState.settledPage]
+        if (currentScreen != settledScreen) {
+            currentScreen = settledScreen
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.surfaceContainerLow,
+                        MaterialTheme.colorScheme.surface
+                    )
                 )
             )
-        },
-        bottomBar = {
-            NavigationBar {
-                Screen.entries.forEach { screen ->
-                    NavigationBarItem(
-                        selected = currentScreen == screen,
-                        onClick = { currentScreen = screen },
-                        icon = { Icon(screen.icon, contentDescription = screen.title) },
-                        label = {
-                            AnimatedContent(
-                                targetState = currentScreen == screen,
-                                label = "label"
-                            ) { selected ->
-                                if (selected) {
-                                    Text(screen.title)
-                                }
+    ) {
+        Scaffold(
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            if (currentScreen == Screen.Settings) settingsTitle(settingsRoute) else currentScreen.title,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    navigationIcon = {
+                        if (currentScreen == Screen.Settings && inSettingsSubPage) {
+                            IconButton(onClick = { settingsNavController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                             }
                         }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = Color.Transparent
                     )
-                }
-            }
-        },
-        containerColor = MaterialTheme.colorScheme.surface
-    ) { padding ->
-        AnimatedContent(
-            targetState = currentScreen,
-            transitionSpec = {
-                fadeIn(animationSpec = tween(300)).togetherWith(fadeOut(animationSpec = tween(300)))
+                )
             },
-            label = "ScreenTransition",
-            modifier = Modifier.padding(padding)
-        ) { screen ->
-            when (screen) {
-                Screen.Hanako -> {
-                    HanakoScreen(
-                        settings = settings,
-                        onOpenOverlayPermission = {
-                            context.startActivity(
-                                Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                            )
-                        },
-                        onToggleOverlay = { enabled ->
-                            if (enabled) {
-                                permissionLauncher.launch(Intent(context, ProjectionPermissionActivity::class.java))
-                            } else {
-                                viewModel.setOverlayEnabled(false)
-                                context.stopService(Intent(context, OverlayService::class.java))
-                                context.stopService(
-                                    Intent(context, MediaProjectionForegroundService::class.java).apply {
-                                        action = MediaProjectionForegroundService.ACTION_STOP
+            bottomBar = {
+                NavigationBar {
+                    Screen.entries.forEach { screen ->
+                        NavigationBarItem(
+                            selected = currentScreen == screen,
+                            onClick = { currentScreen = screen },
+                            icon = { Icon(screen.icon, contentDescription = screen.title) },
+                            label = {
+                                AnimatedContent(
+                                    targetState = currentScreen == screen,
+                                    label = "label"
+                                ) { selected ->
+                                    if (selected) {
+                                        Text(screen.title)
                                     }
-                                )
+                                }
                             }
-                        },
-                        onSelectRoute = viewModel::setRoute,
-                        onClearHistory = viewModel::clearHistory
-                    )
+                        )
+                    }
                 }
-                Screen.Settings -> {
-                    SettingsScreen(
-                        settings = settings,
-                        selectedProvider = selectedProvider,
-                        selectedAssistant = selectedAssistant,
-                        onSelectProvider = viewModel::selectProvider,
-                        onUpdateProvider = viewModel::updateProvider,
-                        onAddProvider = viewModel::addProvider,
-                        onPickModel = { modelPickerTarget = it },
-                        onSelectAssistant = viewModel::selectAssistant,
-                        onUpdateAssistant = viewModel::updateAssistant,
-                        onAddAssistant = viewModel::addAssistant
-                    )
+            },
+            containerColor = Color.Transparent
+        ) { padding ->
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                userScrollEnabled = !inSettingsSubPage
+            ) {
+                when (Screen.entries[it]) {
+                    Screen.Hanako -> {
+                        HanakoScreen(
+                            settings = settings,
+                            overlayEnabled = overlayEnabled,
+                            onOpenOverlayPermission = {
+                                context.startActivity(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                )
+                            },
+                            onToggleOverlay = { enabled ->
+                                if (enabled) {
+                                    context.startActivity(Intent(context, ProjectionPermissionActivity::class.java))
+                                } else {
+                                    context.stopService(Intent(context, OverlayService::class.java))
+                                    context.stopService(
+                                        Intent(context, MediaProjectionForegroundService::class.java).apply {
+                                            action = MediaProjectionForegroundService.ACTION_STOP
+                                        }
+                                    )
+                                }
+                            },
+                            onSelectRoute = viewModel::setRoute,
+                            onClearHistory = viewModel::clearHistory
+                        )
+                    }
+                    Screen.Settings -> {
+                        SettingsNavHost(
+                            navController = settingsNavController,
+                            settings = settings,
+                            onSelectProvider = viewModel::selectProvider,
+                            onUpdateProvider = viewModel::updateProvider,
+                            onAddProvider = viewModel::addProvider,
+                            onDeleteProvider = viewModel::deleteProvider,
+                            onOpenModelSettings = { settingsNavController.navigate(ROUTE_SETTINGS_MODEL) },
+                            onPreviewProviderModels = { providerModelsPreviewId = it },
+                            onPickModel = { providerPickerTarget = it },
+                            onSelectAssistant = viewModel::selectAssistant,
+                            onUpdateAssistant = viewModel::updateAssistant,
+                            onAddAssistant = viewModel::addAssistant,
+                            onUpdateModelSelection = viewModel::updateModelSelection
+                        )
+                    }
                 }
             }
         }
     }
 
-    val pickerProvider = selectedProvider
+    val pickerProvider = settings.providers.firstOrNull { it.id == modelPickerProviderId }
+    if (providerPickerTarget != null) {
+        ProviderSelectDialog(
+            providers = settings.providers,
+            title = "选择${providerPickerTarget?.displayName}提供方",
+            onDismiss = { providerPickerTarget = null },
+            onPick = { provider ->
+                modelPickerProviderId = provider.id
+                modelPickerTarget = providerPickerTarget
+                providerPickerTarget = null
+            }
+        )
+    }
+
     val pickerTarget = modelPickerTarget
     if (pickerProvider != null && pickerTarget != null) {
         val title = when (pickerTarget) {
-            ProviderModelTarget.CHAT -> "选择文本模型"
-            ProviderModelTarget.VISION -> "选择多模态模型"
-            ProviderModelTarget.OCR -> "选择 OCR 模型"
+            ModelPurpose.TEXT -> "选择文本模型"
+            ModelPurpose.VISION -> "选择多模态模型"
+            ModelPurpose.OCR -> "选择 OCR 模型"
         }
         ModelPickerDialog(
             provider = pickerProvider,
             title = title,
-            onDismiss = { modelPickerTarget = null },
+            onDismiss = {
+                modelPickerTarget = null
+                modelPickerProviderId = null
+            },
             onPick = { model ->
-                viewModel.updateProvider(
-                    when (pickerTarget) {
-                        ProviderModelTarget.CHAT -> pickerProvider.copy(chatModel = model)
-                        ProviderModelTarget.VISION -> pickerProvider.copy(visionModel = model)
-                        ProviderModelTarget.OCR -> pickerProvider.copy(ocrModel = model)
-                    }
+                viewModel.updateModelSelection(
+                    pickerTarget,
+                    ModelSelection(providerId = pickerProvider.id, model = model)
                 )
                 modelPickerTarget = null
+                modelPickerProviderId = null
             },
             onCustomModelRequest = { dialogTitle ->
                 customModelTarget = pickerTarget
@@ -201,18 +324,34 @@ fun HanakoApp(viewModel: MainViewModel) {
     customModelDialogTitle?.let { title ->
         CustomModelDialog(
             title = title,
-            onDismiss = { customModelDialogTitle = null },
-            onConfirm = { model ->
-                val provider = selectedProvider ?: return@CustomModelDialog
-                val updated = when (customModelTarget ?: ProviderModelTarget.CHAT) {
-                    ProviderModelTarget.CHAT -> provider.copy(chatModel = model)
-                    ProviderModelTarget.VISION -> provider.copy(visionModel = model)
-                    ProviderModelTarget.OCR -> provider.copy(ocrModel = model)
-                }
-                viewModel.updateProvider(updated)
+            onDismiss = {
                 customModelDialogTitle = null
                 customModelTarget = null
+                modelPickerProviderId = null
+            },
+            onConfirm = { model ->
+                val purpose = customModelTarget ?: ModelPurpose.TEXT
+                val providerId = modelPickerProviderId ?: return@CustomModelDialog
+                viewModel.updateModelSelection(
+                    purpose,
+                    ModelSelection(providerId = providerId, model = model)
+                )
+                customModelDialogTitle = null
+                customModelTarget = null
+                modelPickerTarget = null
+                modelPickerProviderId = null
             }
+        )
+    }
+
+    val previewProvider = settings.providers.firstOrNull { it.id == providerModelsPreviewId }
+    if (previewProvider != null) {
+        ModelPickerDialog(
+            provider = previewProvider,
+            title = "查看可用模型",
+            onDismiss = { providerModelsPreviewId = null },
+            onPick = { providerModelsPreviewId = null },
+            onCustomModelRequest = { }
         )
     }
 }
@@ -220,6 +359,7 @@ fun HanakoApp(viewModel: MainViewModel) {
 @Composable
 fun HanakoScreen(
     settings: `fun`.kirari.hanako.data.AppSettings,
+    overlayEnabled: Boolean,
     onOpenOverlayPermission: () -> Unit,
     onToggleOverlay: (Boolean) -> Unit,
     onSelectRoute: (`fun`.kirari.hanako.data.ProcessingRoute) -> Unit,
@@ -227,30 +367,17 @@ fun HanakoScreen(
 ) {
     LazyColumn(
         modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        MaterialTheme.colorScheme.surfaceContainerLow,
-                        MaterialTheme.colorScheme.surface
-                    )
-                )
-            ),
+            .fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
             HeroSection(
-                overlayEnabled = settings.overlayEnabled,
+                overlayEnabled = overlayEnabled,
+                route = settings.processingRoute,
+                onSelectRoute = onSelectRoute,
                 onOpenOverlayPermission = onOpenOverlayPermission,
                 onToggleOverlay = onToggleOverlay
-            )
-        }
-
-        item {
-            RouteSection(
-                route = settings.processingRoute,
-                onSelect = onSelectRoute
             )
         }
 
@@ -294,55 +421,511 @@ fun HanakoScreen(
 }
 
 @Composable
-fun SettingsScreen(
+private fun SettingsNavHost(
+    navController: androidx.navigation.NavController,
     settings: `fun`.kirari.hanako.data.AppSettings,
-    selectedProvider: `fun`.kirari.hanako.data.ModelProviderConfig?,
-    selectedAssistant: `fun`.kirari.hanako.data.AssistantPreset?,
     onSelectProvider: (String) -> Unit,
     onUpdateProvider: (`fun`.kirari.hanako.data.ModelProviderConfig) -> Unit,
     onAddProvider: () -> Unit,
-    onPickModel: (ProviderModelTarget) -> Unit,
+    onDeleteProvider: (String) -> Unit,
+    onOpenModelSettings: () -> Unit,
+    onPreviewProviderModels: (String) -> Unit,
+    onPickModel: (ModelPurpose) -> Unit,
     onSelectAssistant: (String) -> Unit,
     onUpdateAssistant: (`fun`.kirari.hanako.data.AssistantPreset) -> Unit,
-    onAddAssistant: () -> Unit
+    onAddAssistant: () -> Unit,
+    onUpdateModelSelection: (ModelPurpose, ModelSelection) -> Unit
+) {
+    NavHost(
+        navController = navController as androidx.navigation.NavHostController,
+        startDestination = ROUTE_SETTINGS_MENU,
+        enterTransition = {
+            slideInHorizontally { it } + fadeIn()
+        },
+        exitTransition = {
+            slideOutHorizontally { -it / 2 } + fadeOut()
+        },
+        popEnterTransition = {
+            slideInHorizontally { -it / 2 } + fadeIn()
+        },
+        popExitTransition = {
+            slideOutHorizontally { it }
+        }
+    ) {
+        composable(ROUTE_SETTINGS_MENU) {
+            SettingsMenuScreen(
+                onNavigateProvider = { navController.navigate(ROUTE_SETTINGS_PROVIDER) },
+                onNavigateModel = { navController.navigate(ROUTE_SETTINGS_MODEL) },
+                onNavigateAssistant = { navController.navigate(ROUTE_SETTINGS_ASSISTANT) }
+            )
+        }
+        composable(ROUTE_SETTINGS_PROVIDER) {
+            ProviderSettingsScreen(
+                settings = settings,
+                onAddProvider = onAddProvider,
+                onDeleteProvider = onDeleteProvider,
+                onOpenProvider = { providerId ->
+                    onSelectProvider(providerId)
+                    navController.navigate(providerDetailRoute(providerId))
+                }
+            )
+        }
+        composable("$ROUTE_SETTINGS_PROVIDER_DETAIL/{$ARG_PROVIDER_ID}") { backStackEntry ->
+            val providerId = backStackEntry.arguments?.getString(ARG_PROVIDER_ID)
+            val provider = settings.providers.firstOrNull { it.id == providerId }
+            if (provider != null) {
+                ProviderDetailScreen(
+                    provider = provider,
+                    onUpdateProvider = onUpdateProvider,
+                    onViewModels = { onPreviewProviderModels(provider.id) }
+                )
+            }
+        }
+        composable(ROUTE_SETTINGS_MODEL) {
+            ModelSettingsScreen(
+                settings = settings,
+                onPickModel = onPickModel
+            )
+        }
+        composable(ROUTE_SETTINGS_ASSISTANT) {
+            AssistantSettingsScreen(
+                settings = settings,
+                onAddAssistant = onAddAssistant,
+                onOpenAssistant = { assistantId ->
+                    onSelectAssistant(assistantId)
+                    navController.navigate(assistantDetailRoute(assistantId))
+                }
+            )
+        }
+        composable("$ROUTE_SETTINGS_ASSISTANT_DETAIL/{$ARG_ASSISTANT_ID}") { backStackEntry ->
+            val assistantId = backStackEntry.arguments?.getString(ARG_ASSISTANT_ID)
+            val assistant = settings.assistants.firstOrNull { it.id == assistantId }
+            if (assistant != null) {
+                AssistantDetailScreen(
+                    assistant = assistant,
+                    onUpdateAssistant = onUpdateAssistant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsMenuScreen(
+    onNavigateProvider: () -> Unit,
+    onNavigateModel: () -> Unit,
+    onNavigateAssistant: () -> Unit
 ) {
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            SectionCard(title = "模型提供方") {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    selectedProvider?.let {
-                        ProviderEditor(
-                            provider = it,
-                            providers = settings.providers,
-                            onSelect = onSelectProvider,
-                            onChange = onUpdateProvider,
-                            onAdd = onAddProvider,
-                            onPickModel = onPickModel
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onNavigateProvider),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Build,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Column {
+                        Text(
+                            "模型提供方",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "配置 API 地址与模型",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
         }
-
         item {
-            SectionCard(title = "助手配置") {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AssistantSelector(
-                        assistants = settings.assistants,
-                        selectedId = selectedAssistant?.id,
-                        onSelect = onSelectAssistant,
-                        onChange = onUpdateAssistant,
-                        onAdd = onAddAssistant
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onNavigateModel),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Memory,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Column {
+                        Text(
+                            "模型设置",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "为 OCR、文本、多模态分别指定提供方和模型",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onNavigateAssistant),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Column {
+                        Text(
+                            "助手配置",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "管理助手名称与提示词",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProviderSettingsScreen(
+    settings: `fun`.kirari.hanako.data.AppSettings,
+    onAddProvider: () -> Unit,
+    onDeleteProvider: (String) -> Unit,
+    onOpenProvider: (String) -> Unit
+) {
+    var deleteTargetId by remember { mutableStateOf<String?>(null) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "模型提供方",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                TextButton(onClick = onAddProvider) {
+                    Text("新增")
+                }
+            }
+        }
+        items(settings.providers.size, key = { index -> settings.providers[index].id }) { index ->
+            val provider = settings.providers[index]
+            Surface(
+                modifier = Modifier.combinedClickable(
+                    onClick = { onOpenProvider(provider.id) },
+                    onLongClick = { deleteTargetId = provider.id }
+                ),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            provider.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            provider.kind.displayName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline
                     )
                 }
             }
         }
-        
+        item { Spacer(modifier = Modifier.height(80.dp)) }
+    }
+
+    val deleteTarget = settings.providers.firstOrNull { it.id == deleteTargetId }
+    if (deleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deleteTargetId = null },
+            title = { Text("删除提供方") },
+            text = { Text("确认删除 ${deleteTarget.name}？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteProvider(deleteTarget.id)
+                        deleteTargetId = null
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTargetId = null }) {
+                    Text("取消")
+                }
+            },
+            icon = {
+                Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            }
+        )
+    }
+}
+
+@Composable
+fun ProviderDetailScreen(
+    provider: `fun`.kirari.hanako.data.ModelProviderConfig,
+    onUpdateProvider: (`fun`.kirari.hanako.data.ModelProviderConfig) -> Unit,
+    onViewModels: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            SectionCard(title = "提供方配置") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ProviderEditor(
+                        provider = provider,
+                        onChange = onUpdateProvider
+                    )
+                    OutlinedButton(
+                        onClick = onViewModels,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("查看可用模型")
+                    }
+                }
+            }
+        }
+        item { Spacer(modifier = Modifier.height(80.dp)) }
+    }
+}
+
+@Composable
+fun ModelSettingsScreen(
+    settings: `fun`.kirari.hanako.data.AppSettings,
+    onPickModel: (ModelPurpose) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            SectionCard(title = "模型设置") {
+                ModelPurpose.entries.forEach { purpose ->
+                    val provider = settings.resolveModelProvider(purpose)
+                    val model = settings.resolveModelName(purpose)
+                    ModelButtonField(
+                        label = "${purpose.displayName} 模型",
+                        value = buildString {
+                            append(provider?.name ?: "未选择提供方")
+                            if (model.isNotBlank()) {
+                                append(" / ")
+                                append(model)
+                            }
+                        },
+                        onPick = { onPickModel(purpose) }
+                    )
+                }
+            }
+        }
+        item { Spacer(modifier = Modifier.height(80.dp)) }
+    }
+}
+
+@Composable
+private fun ProviderSelectDialog(
+    providers: List<`fun`.kirari.hanako.data.ModelProviderConfig>,
+    title: String,
+    onDismiss: () -> Unit,
+    onPick: (`fun`.kirari.hanako.data.ModelProviderConfig) -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                LazyColumn(
+                    modifier = Modifier.height(240.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(providers, key = { it.id }) { provider ->
+                        OutlinedButton(
+                            onClick = { onPick(provider) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Text(provider.name)
+                                Text(
+                                    provider.kind.displayName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("取消")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AssistantSettingsScreen(
+    settings: `fun`.kirari.hanako.data.AppSettings,
+    onAddAssistant: () -> Unit,
+    onOpenAssistant: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "助手配置",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                TextButton(onClick = onAddAssistant) {
+                    Text("新增")
+                }
+            }
+        }
+        items(settings.assistants.size, key = { index -> settings.assistants[index].id }) { index ->
+            val assistant = settings.assistants[index]
+            Surface(
+                onClick = { onOpenAssistant(assistant.id) },
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            assistant.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            assistant.systemPrompt.replace('\n', ' '),
+                            maxLines = 2,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
+        item { Spacer(modifier = Modifier.height(80.dp)) }
+    }
+}
+
+@Composable
+fun AssistantDetailScreen(
+    assistant: `fun`.kirari.hanako.data.AssistantPreset,
+    onUpdateAssistant: (`fun`.kirari.hanako.data.AssistantPreset) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            SectionCard(title = "助手配置") {
+                AssistantSelector(
+                    assistant = assistant,
+                    onChange = onUpdateAssistant
+                )
+            }
+        }
         item { Spacer(modifier = Modifier.height(80.dp)) }
     }
 }

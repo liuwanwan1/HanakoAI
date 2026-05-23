@@ -1,8 +1,8 @@
 package `fun`.kirari.hanako.ui.components
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -24,7 +23,6 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,48 +38,15 @@ import `fun`.kirari.hanako.data.ProviderKind
 import `fun`.kirari.hanako.data.displayName
 import `fun`.kirari.hanako.data.requestPreviewUrl
 
-enum class ProviderModelTarget {
-    CHAT,
-    VISION,
-    OCR
-}
-
 @Composable
 fun ProviderEditor(
     provider: ModelProviderConfig,
-    providers: List<ModelProviderConfig>,
-    onSelect: (String) -> Unit,
-    onChange: (ModelProviderConfig) -> Unit,
-    onAdd: () -> Unit,
-    onPickModel: (ProviderModelTarget) -> Unit
+    onChange: (ModelProviderConfig) -> Unit
 ) {
     Column(
         modifier = Modifier.animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                providers.forEach {
-                    FilterChip(
-                        selected = it.id == provider.id,
-                        onClick = { onSelect(it.id) },
-                        label = { Text(it.name) },
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                }
-            }
-            TextButton(onClick = onAdd) {
-                Text("新增")
-            }
-        }
-
         ProviderTypeSelector(
             kind = provider.kind,
             onChange = { nextKind ->
@@ -122,35 +87,6 @@ fun ProviderEditor(
             label = "API Key",
             password = true
         )
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                "模型选择",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            )
-            ModelButtonField(
-                label = when (provider.kind) {
-                    ProviderKind.OPENAI_RESPONSES -> "OpenAI Responses"
-                    else -> "文本模型"
-                },
-                value = provider.chatModel,
-                onPick = { onPickModel(ProviderModelTarget.CHAT) }
-            )
-
-            ModelButtonField(
-                label = "多模态模型",
-                value = provider.visionModel,
-                onPick = { onPickModel(ProviderModelTarget.VISION) }
-            )
-
-            ModelButtonField(
-                label = "OCR 模型",
-                value = provider.ocrModel,
-                onPick = { onPickModel(ProviderModelTarget.OCR) }
-            )
-        }
     }
 }
 
@@ -224,7 +160,7 @@ private fun EditableField(
 }
 
 @Composable
-private fun ModelButtonField(
+fun ModelButtonField(
     label: String,
     value: String,
     onPick: () -> Unit,
@@ -233,7 +169,7 @@ private fun ModelButtonField(
         onClick = onPick,
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(
+        border = BorderStroke(
             1.dp,
             MaterialTheme.colorScheme.outlineVariant
         )

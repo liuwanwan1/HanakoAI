@@ -25,23 +25,26 @@ class AiGateway(
     private val sseClient = SseStreamClient(client)
 
     suspend fun streamOcrThenChat(
-        provider: ModelProviderConfig,
+        ocrProvider: ModelProviderConfig,
+        ocrModel: String,
+        textProvider: ModelProviderConfig,
+        textModel: String,
         assistant: AssistantPreset,
         bitmap: Bitmap,
         onOcrDelta: (String) -> Unit,
         onAnswerDelta: (String) -> Unit
     ): Pair<String, String> {
         val ocrText = streamVision(
-            provider = provider,
-            model = provider.ocrModel.ifBlank { provider.visionModel },
+            provider = ocrProvider,
+            model = ocrModel,
             systemPrompt = "请准确提取图片中的全部文字，按原有结构输出，不要解释。",
             userPrompt = "请执行 OCR。",
             bitmap = bitmap,
             onDelta = onOcrDelta
         )
         val answer = streamText(
-            provider = provider,
-            model = provider.chatModel,
+            provider = textProvider,
+            model = textModel,
             systemPrompt = assistant.systemPrompt,
             userPrompt = "以下是 OCR 结果，请完成任务：\n$ocrText",
             onDelta = onAnswerDelta
@@ -51,13 +54,14 @@ class AiGateway(
 
     suspend fun streamVisionDirect(
         provider: ModelProviderConfig,
+        model: String,
         assistant: AssistantPreset,
         bitmap: Bitmap,
         onAnswerDelta: (String) -> Unit
     ): String {
         return streamVision(
             provider = provider,
-            model = provider.visionModel,
+            model = model,
             systemPrompt = assistant.systemPrompt,
             userPrompt = "请直接基于图片内容完成任务。",
             bitmap = bitmap,

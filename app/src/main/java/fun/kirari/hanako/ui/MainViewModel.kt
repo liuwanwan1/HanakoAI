@@ -5,10 +5,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import `fun`.kirari.hanako.data.AppSettings
 import `fun`.kirari.hanako.data.AssistantPreset
+import `fun`.kirari.hanako.data.ModelPurpose
 import `fun`.kirari.hanako.data.ModelProviderConfig
+import `fun`.kirari.hanako.data.ModelSelection
 import `fun`.kirari.hanako.data.ProcessingResult
 import `fun`.kirari.hanako.data.ProcessingRoute
 import `fun`.kirari.hanako.data.SettingsStore
+import `fun`.kirari.hanako.data.defaultAssistant
+import `fun`.kirari.hanako.data.defaultProvider
+import `fun`.kirari.hanako.data.modelSelectionFor
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -52,6 +57,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteProvider(providerId: String) {
+        viewModelScope.launch {
+            store.update { current ->
+                val remaining = current.providers.filterNot { it.id == providerId }
+                val providers = if (remaining.isEmpty()) listOf(defaultProvider()) else remaining
+                val selectedProviderId = providers.firstOrNull()?.id
+                val fallbackProvider = providers.firstOrNull()
+                current.copy(
+                    providers = providers,
+                    selectedProviderId = selectedProviderId,
+                    textModelSelection = remapSelection(
+                        current.modelSelectionFor(ModelPurpose.TEXT),
+                        providers,
+                        fallbackProvider
+                    ),
+                    visionModelSelection = remapSelection(
+                        current.modelSelectionFor(ModelPurpose.VISION),
+                        providers,
+                        fallbackProvider
+                    ),
+                    ocrModelSelection = remapSelection(
+                        current.modelSelectionFor(ModelPurpose.OCR),
+                        providers,
+                        fallbackProvider
+                    )
+                )
+            }
+        }
+    }
+
     fun updateAssistant(assistant: AssistantPreset) {
         viewModelScope.launch {
             store.update { current ->
@@ -84,15 +119,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteAssistant(assistantId: String) {
+        viewModelScope.launch {
+            store.update { current ->
+                val remaining = current.assistants.filterNot { it.id == assistantId }
+                val assistants = if (remaining.isEmpty()) listOf(defaultAssistant()) else remaining
+                val selectedAssistantId = assistants.firstOrNull()?.id
+                current.copy(
+                    assistants = assistants,
+                    selectedAssistantId = selectedAssistantId
+                )
+            }
+        }
+    }
+
     fun setRoute(route: ProcessingRoute) {
         viewModelScope.launch {
             store.update { it.copy(processingRoute = route) }
         }
     }
 
-    fun setOverlayEnabled(enabled: Boolean) {
+    fun updateModelSelection(purpose: ModelPurpose, selection: ModelSelection) {
         viewModelScope.launch {
-            store.update { it.copy(overlayEnabled = enabled) }
+            store.update { current ->
+                when (purpose) {
+                    ModelPurpose.TEXT -> current.copy(textModelSelection = selection)
+                    ModelPurpose.VISION -> current.copy(visionModelSelection = selection)
+                    ModelPurpose.OCR -> current.copy(ocrModelSelection = selection)
+                }
+            }
         }
     }
 
@@ -108,6 +163,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lastResult = result,
                 history = (listOf(result) + it.history).take(20)
             ) }
+        }
+    }
+
+    private fun remapSelection(
+        selection: ModelSelection,
+        providers: List<ModelProviderConfig>,
+        fallbackProvider: ModelProviderConfig?
+    ): ModelSelection {
+        val providerExists = providers.any { it.id == selection.providerId }
+        return when {
+            providerExists -> selection
+            fallbackProvider != null -> selection.copy(providerId = fallbackProvider.id)
+            else -> selection.copy(providerId = null, model = "")
         }
     }
 }

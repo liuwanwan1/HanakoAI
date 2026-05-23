@@ -60,8 +60,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import `fun`.kirari.hanako.data.AppSettings
+import `fun`.kirari.hanako.data.ModelPurpose
 import `fun`.kirari.hanako.data.ProcessingResult
 import `fun`.kirari.hanako.data.ProcessingRoute
+import `fun`.kirari.hanako.data.resolveModelName
+import `fun`.kirari.hanako.data.resolveModelProvider
 import `fun`.kirari.hanako.data.SettingsStore
 import `fun`.kirari.hanako.network.AiGateway
 import `fun`.kirari.hanako.overlay.MarkdownLatexText
@@ -161,10 +164,14 @@ class CaptureViewModel(
 
     fun process(bitmap: Bitmap) {
         val state = _uiState.value
-        val provider = state.settings.providers.firstOrNull { it.id == state.settings.selectedProviderId }
-            ?: return
         val assistant = state.settings.assistants.firstOrNull { it.id == state.settings.selectedAssistantId }
             ?: return
+        val ocrProvider = state.settings.resolveModelProvider(ModelPurpose.OCR)
+        val ocrModel = state.settings.resolveModelName(ModelPurpose.OCR)
+        val textProvider = state.settings.resolveModelProvider(ModelPurpose.TEXT)
+        val textModel = state.settings.resolveModelName(ModelPurpose.TEXT)
+        val visionProvider = state.settings.resolveModelProvider(ModelPurpose.VISION)
+        val visionModel = state.settings.resolveModelName(ModelPurpose.VISION)
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
@@ -179,8 +186,14 @@ class CaptureViewModel(
             runCatching {
                 when (state.settings.processingRoute) {
                     ProcessingRoute.OCR_THEN_LLM -> {
+                        if (ocrProvider == null || ocrModel.isBlank() || textProvider == null || textModel.isBlank()) {
+                            error("请先在模型设置中配置 OCR 和文本模型")
+                        }
                         val (ocrText, answer) = gateway.streamOcrThenChat(
-                            provider = provider,
+                            ocrProvider = ocrProvider,
+                            ocrModel = ocrModel,
+                            textProvider = textProvider,
+                            textModel = textModel,
                             assistant = assistant,
                             bitmap = bitmap,
                             onOcrDelta = { delta ->
@@ -203,8 +216,12 @@ class CaptureViewModel(
                     }
 
                     ProcessingRoute.MULTIMODAL_DIRECT -> {
+                        if (visionProvider == null || visionModel.isBlank()) {
+                            error("请先在模型设置中配置多模态模型")
+                        }
                         val answer = gateway.streamVisionDirect(
-                            provider = provider,
+                            provider = visionProvider,
+                            model = visionModel,
                             assistant = assistant,
                             bitmap = bitmap,
                             onAnswerDelta = { delta ->

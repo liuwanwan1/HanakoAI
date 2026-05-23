@@ -20,9 +20,9 @@ class SettingsStore(private val context: Context) {
     val settings: Flow<AppSettings> = context.dataStore.data.map { preferences ->
         val raw = preferences[SETTINGS_KEY]
         if (raw.isNullOrBlank()) {
-            AppSettings()
+            AppSettings().normalize()
         } else {
-            runCatching { json.decodeFromString<AppSettings>(raw) }.getOrElse { AppSettings() }
+            runCatching { json.decodeFromString<AppSettings>(raw).normalize() }.getOrElse { AppSettings().normalize() }
         }
     }
 
@@ -30,11 +30,11 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { preferences ->
             val currentRaw = preferences[SETTINGS_KEY]
             val current = if (currentRaw.isNullOrBlank()) {
-                AppSettings()
+                AppSettings().normalize()
             } else {
-                runCatching { json.decodeFromString<AppSettings>(currentRaw) }.getOrElse { AppSettings() }
+                runCatching { json.decodeFromString<AppSettings>(currentRaw).normalize() }.getOrElse { AppSettings().normalize() }
             }
-            preferences[SETTINGS_KEY] = json.encodeToString(AppSettings.serializer(), transform(current))
+            preferences[SETTINGS_KEY] = json.encodeToString(AppSettings.serializer(), transform(current).normalize())
         }
     }
 

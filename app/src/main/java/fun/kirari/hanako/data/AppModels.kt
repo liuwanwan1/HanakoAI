@@ -24,6 +24,19 @@ data class ModelProviderConfig(
     val enabled: Boolean = true
 )
 
+@Serializable
+enum class ModelPurpose {
+    OCR,
+    TEXT,
+    VISION
+}
+
+@Serializable
+data class ModelSelection(
+    val providerId: String? = null,
+    val model: String = ""
+)
+
 val ProviderKind.displayName: String
     get() = when (this) {
         ProviderKind.OPENAI_COMPATIBLE -> "OpenAI Compatible"
@@ -80,7 +93,9 @@ data class AppSettings(
     val assistants: List<AssistantPreset> = defaultAssistants(),
     val selectedAssistantId: String? = assistants.firstOrNull()?.id,
     val processingRoute: ProcessingRoute = ProcessingRoute.OCR_THEN_LLM,
-    val overlayEnabled: Boolean = false,
+    val textModelSelection: ModelSelection = ModelSelection(),
+    val visionModelSelection: ModelSelection = ModelSelection(),
+    val ocrModelSelection: ModelSelection = ModelSelection(),
     val lastResult: ProcessingResult? = null,
     val history: List<ProcessingResult> = emptyList()
 )
@@ -97,12 +112,80 @@ data class ProcessingResult(
 fun defaultProvider(): ModelProviderConfig = ModelProviderConfig()
 
 fun defaultAssistants(): List<AssistantPreset> = listOf(
-    AssistantPreset(
-        name = "聊天记录总结助手",
-        systemPrompt = "你是聊天记录总结助手。请提炼重点、待办、情绪倾向，并用简洁中文输出。"
-    ),
+    defaultAssistant(),
     AssistantPreset(
         name = "题目解答助手",
         systemPrompt = "你是题目解答助手。请先识别题目内容，再给出解题思路、关键知识点和答案。"
     )
 )
+
+fun defaultAssistant(): AssistantPreset = AssistantPreset(
+    name = "聊天记录总结助手",
+    systemPrompt = "你是聊天记录总结助手。请提炼重点、待办、情绪倾向，并用简洁中文输出。"
+)
+
+val ModelPurpose.displayName: String
+    get() = when (this) {
+        ModelPurpose.OCR -> "OCR"
+        ModelPurpose.TEXT -> "文本"
+        ModelPurpose.VISION -> "多模态"
+    }
+
+fun AppSettings.modelSelectionFor(purpose: ModelPurpose): ModelSelection = when (purpose) {
+    ModelPurpose.OCR -> ocrModelSelection
+    ModelPurpose.TEXT -> textModelSelection
+    ModelPurpose.VISION -> visionModelSelection
+}
+
+fun AppSettings.resolveModelProvider(purpose: ModelPurpose): ModelProviderConfig? {
+    val selection = modelSelectionFor(purpose)
+    return providers.firstOrNull { it.id == selection.providerId }
+}
+
+fun AppSettings.resolveModelName(purpose: ModelPurpose): String {
+    return modelSelectionFor(purpose).model
+}
+
+fun AppSettings.normalize(): AppSettings {
+    val fallbackProvider = providers.firstOrNull { it.id == selectedProviderId } ?: providers.firstOrNull()
+    return copy(
+        textModelSelection = textModelSelection.normalize(
+            providers = providers,
+            fallbackProvider = fallbackProvider,
+            fallbackModel = fallbackProvider?.chatModel.orEmpty()
+        ),
+        visionModelSelection = visionModelSelection.normalize(
+            providers = providers,
+            fallbackProvider = fallbackProvider,
+            fallbackModel = fallbackProvider?.visionModel.orEmpty()
+        ),
+        ocrModelSelection = ocrModelSelection.normalize(
+            providers = providers,
+            fallbackProvider = fallbackProvider,
+            fallbackModel = fallbackProvider?.ocrModel?.ifBlank {
+                fallbackProvider.visionModel
+            } ?: fallbackProvider?.visionModel.orEmpty()
+        )
+    )
+}
+
+private fun ModelSelection.normalize(
+    providers: List<ModelProviderConfig>,
+    fallbackProvider: ModelProviderConfig?,
+    fallbackModel: String
+): ModelSelection {
+    val currentProvider = providers.firstOrNull { it.id == providerId }
+    return when {
+        currentProvider != null && model.isNotBlank() -> this
+        currentProvider != null -> copy(model = fallbackModelFrom(currentProvider, fallbackModel))
+        fallbackProvider != null -> ModelSelection(
+            providerId = fallbackProvider.id,
+            model = model.ifBlank { fallbackModel }
+        )
+        else -> this
+    }
+}
+
+private fun fallbackModelFrom(provider: ModelProviderConfig, fallbackModel: String): String {
+    return fallbackModel.ifBlank { provider.chatModel.ifBlank { provider.visionModel.ifBlank { provider.ocrModel } } }
+}

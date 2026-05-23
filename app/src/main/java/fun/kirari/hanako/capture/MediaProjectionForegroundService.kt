@@ -24,6 +24,8 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import `fun`.kirari.hanako.MainActivity
 import `fun`.kirari.hanako.R
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.nio.ByteBuffer
 
 class MediaProjectionForegroundService : Service() {
@@ -95,6 +97,9 @@ class MediaProjectionForegroundService : Service() {
 }
 
 object ProjectionSessionManager {
+    private val _sessionActive = MutableStateFlow(false)
+    val sessionActive: StateFlow<Boolean> = _sessionActive
+
     @Volatile
     private var mediaProjection: MediaProjection? = null
     @Volatile
@@ -144,6 +149,7 @@ object ProjectionSessionManager {
         imageReader = localReader
         virtualDisplay = localDisplay
         callback = localCallback
+        _sessionActive.value = true
     }
 
     fun hasActiveSession(): Boolean {
@@ -182,6 +188,7 @@ object ProjectionSessionManager {
         mediaProjection = null
         width = 0
         height = 0
+        _sessionActive.value = false
     }
 
     private fun waitForImage(reader: ImageReader): Image? {
