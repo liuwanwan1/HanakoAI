@@ -96,9 +96,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun clearHistory() {
+        viewModelScope.launch {
+            store.update { it.copy(history = emptyList(), lastResult = null) }
+        }
+    }
+
     fun saveResult(result: ProcessingResult) {
         viewModelScope.launch {
-            store.update { it.copy(lastResult = result) }
+            store.update { it.copy(
+                lastResult = result,
+                history = (listOf(result) + it.history).take(20)
+            ) }
         }
     }
 }

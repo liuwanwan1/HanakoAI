@@ -81,7 +81,8 @@ data class AppSettings(
     val selectedAssistantId: String? = assistants.firstOrNull()?.id,
     val processingRoute: ProcessingRoute = ProcessingRoute.OCR_THEN_LLM,
     val overlayEnabled: Boolean = false,
-    val lastResult: ProcessingResult? = null
+    val lastResult: ProcessingResult? = null,
+    val history: List<ProcessingResult> = emptyList()
 )
 
 @Serializable
