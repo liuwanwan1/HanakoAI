@@ -1,0 +1,128 @@
+package `fun`.kirari.hanako.overlay
+
+import android.graphics.Rect
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import ru.noties.jlatexmath.JLatexMathDrawable
+
+@Composable
+internal fun LatexInline(
+    latex: String,
+    modifier: Modifier = Modifier
+) {
+    LatexText(
+        latex = latex,
+        modifier = modifier,
+        fontSize = LocalTextStyle.current.fontSize,
+        color = LocalContentColor.current
+    )
+}
+
+@Composable
+internal fun LatexBlock(
+    latex: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 2.dp)
+    ) {
+        LatexText(
+            latex = latex,
+            fontSize = MaterialTheme.typography.bodyLarge.fontSize,
+            color = LocalContentColor.current
+        )
+    }
+}
+
+@Composable
+internal fun LatexText(
+    latex: String,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = TextUnit.Unspecified,
+    color: Color = Color.Unspecified,
+    style: TextStyle = LocalTextStyle.current
+) {
+    val density = LocalDensity.current
+    val resolvedStyle = style.merge(
+        fontSize = fontSize,
+        color = color
+    )
+    val resolvedFontSize = if (fontSize == TextUnit.Unspecified) LocalTextStyle.current.fontSize else fontSize
+    val drawable = remember(latex, resolvedFontSize, color) {
+        runCatching {
+            JLatexMathDrawable.builder(processLatex(latex))
+                .textSize(with(density) { resolvedFontSize.toPx() })
+                .color(resolvedStyle.color.toArgb())
+                .background(Color.Transparent.toArgb())
+                .padding(0)
+                .align(JLatexMathDrawable.ALIGN_LEFT)
+                .build()
+        }.getOrNull()
+    }
+
+    if (drawable == null) {
+        Text(
+            text = latex,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            modifier = modifier
+        )
+        return
+    }
+
+    with(density) {
+        Canvas(
+            modifier = modifier.size(
+                width = drawable.bounds.width().toFloat().dp,
+                height = drawable.bounds.height().toFloat().dp
+            )
+        ) {
+            drawable.draw(drawContext.canvas.nativeCanvas)
+        }
+    }
+}
+
+internal fun assumeLatexSize(latex: String, fontSize: Float): Rect {
+    return runCatching {
+        JLatexMathDrawable.builder(processLatex(latex))
+            .textSize(fontSize)
+            .padding(0)
+            .build()
+            .bounds
+    }.getOrElse { Rect(0, 0, 0, 0) }
+}
+
+private val inlineDollarRegex = Regex("""^\$(.*?)\$""", RegexOption.DOT_MATCHES_ALL)
+private val displayDollarRegex = Regex("""^\$\$(.*?)\$\$""", RegexOption.DOT_MATCHES_ALL)
+private val inlineParenRegex = Regex("""^\\\((.*?)\\\)""", RegexOption.DOT_MATCHES_ALL)
+private val displayBracketRegex = Regex("""^\\\[(.*?)\\\]""", RegexOption.DOT_MATCHES_ALL)
+
+internal fun processLatex(latex: String): String {
+    val trimmed = latex.trim()
+    return when {
+        displayDollarRegex.matches(trimmed) -> displayDollarRegex.find(trimmed)?.groupValues?.get(1)?.trim().orEmpty()
+        inlineDollarRegex.matches(trimmed) -> inlineDollarRegex.find(trimmed)?.groupValues?.get(1)?.trim().orEmpty()
+        displayBracketRegex.matches(trimmed) -> displayBracketRegex.find(trimmed)?.groupValues?.get(1)?.trim().orEmpty()
+        inlineParenRegex.matches(trimmed) -> inlineParenRegex.find(trimmed)?.groupValues?.get(1)?.trim().orEmpty()
+        else -> trimmed
+    }
+}

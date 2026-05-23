@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Hanako</string>
+    <string name="overlay_notification_title">Hanako 悬浮球运行中</string>
+    <string name="overlay_notification_text">点击悬浮球即可抓屏并发给助手</string>
+    <string name="capture_notification_title">Hanako 正在准备屏幕捕捉</string>
+    <string name="capture_notification_text">请在系统弹窗中允许屏幕共享</string>
+</resources>
