@@ -4,12 +4,13 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.pager.HorizontalPager
@@ -60,7 +61,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -79,24 +79,21 @@ import `fun`.kirari.hanako.data.ModelPurpose
 import `fun`.kirari.hanako.data.ModelSelection
 import `fun`.kirari.hanako.data.ProcessingRoute
 import `fun`.kirari.hanako.data.displayName
-import `fun`.kirari.hanako.data.modelSelectionFor
-import `fun`.kirari.hanako.data.normalize
 import `fun`.kirari.hanako.overlay.OverlayLaunchMode
 import `fun`.kirari.hanako.overlay.OverlayService
 import `fun`.kirari.hanako.ui.components.CustomModelDialog
 import `fun`.kirari.hanako.ui.components.HeroSection
 import `fun`.kirari.hanako.ui.components.ModelPickerDialog
-import `fun`.kirari.hanako.ui.components.RouteSection
 
 enum class Screen(val title: String, val icon: ImageVector) {
     Hanako("Hanako", Icons.Default.Home),
     Settings("设置", Icons.Default.Settings)
 }
 
+private const val ROUTE_HOME_SHELL = "home_shell"
 private const val ROUTE_HANAKO_HOME = "hanako_home"
 private const val ROUTE_HANAKO_HISTORY = "hanako_history"
 private const val ROUTE_HANAKO_HISTORY_DETAIL = "hanako_history_detail"
-private const val ROUTE_SETTINGS_MENU = "settings_menu"
 private const val ROUTE_SETTINGS_PROVIDER = "settings_provider"
 private const val ROUTE_SETTINGS_PROVIDER_DETAIL = "settings_provider_detail"
 private const val ROUTE_SETTINGS_MODEL = "settings_model"
@@ -111,25 +108,20 @@ private fun providerDetailRoute(providerId: String): String = "$ROUTE_SETTINGS_P
 private fun assistantDetailRoute(assistantId: String): String = "$ROUTE_SETTINGS_ASSISTANT_DETAIL/$assistantId"
 private fun historyDetailRoute(historyId: String): String = "$ROUTE_HANAKO_HISTORY_DETAIL/$historyId"
 
-private fun settingsTitle(route: String?): String = when (route) {
+private fun appTitle(route: String?, currentScreen: Screen): String = when (route) {
+    ROUTE_HOME_SHELL -> currentScreen.title
+    ROUTE_HANAKO_HOME -> Screen.Hanako.title
+    ROUTE_HANAKO_HISTORY -> "历史记录"
     ROUTE_SETTINGS_PROVIDER -> "模型提供方"
     ROUTE_SETTINGS_MODEL -> "模型设置"
     ROUTE_SETTINGS_ASSISTANT -> "助手配置"
     ROUTE_SETTINGS_AUTOMATION -> "自动模式"
-    null -> "设置"
-    else -> when {
-        route.startsWith("$ROUTE_SETTINGS_PROVIDER_DETAIL/") -> "编辑提供方"
-        route.startsWith("$ROUTE_SETTINGS_ASSISTANT_DETAIL/") -> "编辑助手"
-        else -> "设置"
-    }
-}
-
-private fun hanakoTitle(route: String?): String = when (route) {
-    ROUTE_HANAKO_HISTORY -> "历史记录"
-    null -> Screen.Hanako.title
+    null -> currentScreen.title
     else -> when {
         route.startsWith("$ROUTE_HANAKO_HISTORY_DETAIL/") -> "历史详情"
-        else -> Screen.Hanako.title
+        route.startsWith("$ROUTE_SETTINGS_PROVIDER_DETAIL/") -> "编辑提供方"
+        route.startsWith("$ROUTE_SETTINGS_ASSISTANT_DETAIL/") -> "编辑助手"
+        else -> currentScreen.title
     }
 }
 
@@ -141,7 +133,6 @@ fun HanakoApp(viewModel: MainViewModel) {
     val overlayEnabled by ProjectionSessionManager.sessionActive.collectAsState()
     var hasOverlayPermission by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    val selectedAssistant = settings.assistants.firstOrNull { it.id == settings.selectedAssistantId }
     var providerModelsPreviewId by remember { mutableStateOf<String?>(null) }
     var modelPickerTarget by remember { mutableStateOf<ModelPurpose?>(null) }
     var customModelTarget by remember { mutableStateOf<ModelPurpose?>(null) }
@@ -150,21 +141,9 @@ fun HanakoApp(viewModel: MainViewModel) {
     var modelPickerProviderId by remember { mutableStateOf<String?>(null) }
 
     var currentScreen by rememberSaveable { mutableStateOf(Screen.Hanako) }
-    var pendingHanakoReset by rememberSaveable { mutableStateOf(false) }
-    var pendingSettingsReset by rememberSaveable { mutableStateOf(false) }
-
-    val hanakoNavController = rememberNavController()
-    val hanakoBackStackEntry by hanakoNavController.currentBackStackEntryAsState()
-    val hanakoRoute = hanakoBackStackEntry?.destination?.route
-    val inHanakoSubPage = hanakoRoute != null && hanakoRoute != ROUTE_HANAKO_HOME
-    val settingsNavController = rememberNavController()
-    val settingsBackStackEntry by settingsNavController.currentBackStackEntryAsState()
-    val settingsRoute = settingsBackStackEntry?.destination?.route
-    val inSettingsSubPage = settingsRoute != null && settingsRoute != ROUTE_SETTINGS_MENU
-    val pagerState = rememberPagerState(
-        initialPage = currentScreen.ordinal,
-        pageCount = { Screen.entries.size }
-    )
+    val navController = rememberNavController()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -179,39 +158,8 @@ fun HanakoApp(viewModel: MainViewModel) {
         }
     }
 
-    BackHandler(enabled = currentScreen == Screen.Settings && !inSettingsSubPage) {
+    BackHandler(enabled = currentRoute == ROUTE_HOME_SHELL && currentScreen == Screen.Settings) {
         currentScreen = Screen.Hanako
-    }
-
-    LaunchedEffect(currentScreen) {
-        if (pagerState.targetPage != currentScreen.ordinal && pagerState.currentPage != currentScreen.ordinal) {
-            pagerState.animateScrollToPage(currentScreen.ordinal)
-        }
-    }
-
-    LaunchedEffect(pagerState.settledPage) {
-        val settledScreen = Screen.entries[pagerState.settledPage]
-        if (currentScreen != settledScreen) {
-            currentScreen = settledScreen
-        }
-    }
-
-    LaunchedEffect(currentScreen, hanakoRoute, pendingHanakoReset) {
-        if (currentScreen == Screen.Hanako && pendingHanakoReset && hanakoRoute != null) {
-            if (hanakoRoute != ROUTE_HANAKO_HOME) {
-                hanakoNavController.popBackStack(ROUTE_HANAKO_HOME, inclusive = false)
-            }
-            pendingHanakoReset = false
-        }
-    }
-
-    LaunchedEffect(currentScreen, settingsRoute, pendingSettingsReset) {
-        if (currentScreen == Screen.Settings && pendingSettingsReset && settingsRoute != null) {
-            if (settingsRoute != ROUTE_SETTINGS_MENU) {
-                settingsNavController.popBackStack(ROUTE_SETTINGS_MENU, inclusive = false)
-            }
-            pendingSettingsReset = false
-        }
     }
 
     Box(
@@ -231,24 +179,14 @@ fun HanakoApp(viewModel: MainViewModel) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            when (currentScreen) {
-                                Screen.Settings -> settingsTitle(settingsRoute)
-                                Screen.Hanako -> hanakoTitle(hanakoRoute)
-                            },
+                            appTitle(currentRoute, currentScreen),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     },
                     navigationIcon = {
-                        when {
-                            currentScreen == Screen.Hanako && inHanakoSubPage -> {
-                                IconButton(onClick = { hanakoNavController.popBackStack() }) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                                }
-                            }
-                            currentScreen == Screen.Settings && inSettingsSubPage -> {
-                                IconButton(onClick = { settingsNavController.popBackStack() }) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                                }
+                        if (currentRoute != null && currentRoute != ROUTE_HOME_SHELL) {
+                            IconButton(onClick = { navController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                             }
                         }
                     },
@@ -258,108 +196,167 @@ fun HanakoApp(viewModel: MainViewModel) {
                 )
             },
             bottomBar = {
-                NavigationBar {
-                    Screen.entries.forEach { screen ->
-                        NavigationBarItem(
-                            selected = currentScreen == screen,
-                            onClick = {
-                                when (screen) {
-                                    Screen.Hanako -> {
-                                        pendingHanakoReset = true
-                                        currentScreen = Screen.Hanako
-                                    }
-                                    Screen.Settings -> {
-                                        pendingSettingsReset = true
-                                        currentScreen = Screen.Settings
-                                    }
-                                }
-                            },
-                            icon = { Icon(screen.icon, contentDescription = screen.title) },
-                            label = {
-                                AnimatedContent(
-                                    targetState = currentScreen == screen,
-                                    label = "label"
-                                ) { selected ->
-                                    if (selected) {
-                                        Text(screen.title)
-                                    }
-                                }
-                            }
-                        )
+                AnimatedVisibility(
+                    visible = currentRoute == ROUTE_HOME_SHELL,
+                    enter = slideInVertically { it } + fadeIn(),
+                    exit = slideOutVertically { it } + fadeOut()
+                ) {
+                    NavigationBar {
+                        Screen.entries.forEach { screen ->
+                            NavigationBarItem(
+                                selected = currentScreen == screen,
+                                onClick = { currentScreen = screen },
+                                icon = { Icon(screen.icon, contentDescription = screen.title) },
+                                label = { Text(screen.title) }
+                            )
+                        }
                     }
                 }
             },
             containerColor = Color.Transparent
         ) { padding ->
-            HorizontalPager(
-                state = pagerState,
+            NavHost(
+                navController = navController,
+                startDestination = ROUTE_HOME_SHELL,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                userScrollEnabled = !inSettingsSubPage && !inHanakoSubPage
+                enterTransition = {
+                    slideInHorizontally { it } + fadeIn()
+                },
+                exitTransition = {
+                    slideOutHorizontally { -it / 2 } + fadeOut()
+                },
+                popEnterTransition = {
+                    slideInHorizontally { -it / 2 } + fadeIn()
+                },
+                popExitTransition = {
+                    slideOutHorizontally { it }
+                }
             ) {
-                when (Screen.entries[it]) {
-                    Screen.Hanako -> {
-                    HanakoNavHost(
-                        navController = hanakoNavController,
-                        settings = settings,
-                        overlayEnabled = overlayEnabled,
-                        hasOverlayPermission = hasOverlayPermission,
-                        onOpenOverlayPermission = {
-                            context.startActivity(
-                                Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                    )
-                                )
-                            },
-                            onToggleOverlay = { enabled ->
-                                if (enabled) {
+                composable(ROUTE_HOME_SHELL) {
+                    MainShellScreen(
+                        currentScreen = currentScreen,
+                        onScreenChange = { currentScreen = it },
+                        hanakoContent = {
+                            HanakoHomeScreen(
+                                settings = settings,
+                                overlayEnabled = overlayEnabled,
+                                hasOverlayPermission = hasOverlayPermission,
+                                onOpenOverlayPermission = {
                                     context.startActivity(
-                                        Intent(context, ProjectionPermissionActivity::class.java).apply {
-                                            putExtra(
-                                                ProjectionPermissionActivity.EXTRA_LAUNCH_MODE,
-                                                OverlayLaunchMode.NORMAL.name
-                                            )
-                                        }
+                                        Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}")
+                                        )
                                     )
-                                } else {
-                                    context.stopService(Intent(context, OverlayService::class.java))
-                                    context.stopService(
-                                        Intent(context, MediaProjectionForegroundService::class.java).apply {
-                                            action = MediaProjectionForegroundService.ACTION_STOP
-                                        }
-                                    )
-                                }
-                            },
-                            onSelectRoute = viewModel::setRoute,
-                            onClearHistory = viewModel::clearHistory,
-                            onDeleteHistoryItem = viewModel::deleteHistoryItem
-                        )
-                    }
-                    Screen.Settings -> {
-                        SettingsNavHost(
-                            navController = settingsNavController,
-                            settings = settings,
-                            onSelectProvider = viewModel::selectProvider,
+                                },
+                                onToggleOverlay = { enabled ->
+                                    if (enabled) {
+                                        context.startActivity(
+                                            Intent(context, ProjectionPermissionActivity::class.java).apply {
+                                                putExtra(
+                                                    ProjectionPermissionActivity.EXTRA_LAUNCH_MODE,
+                                                    OverlayLaunchMode.NORMAL.name
+                                                )
+                                            }
+                                        )
+                                    } else {
+                                        context.stopService(Intent(context, OverlayService::class.java))
+                                        context.stopService(
+                                            Intent(context, MediaProjectionForegroundService::class.java).apply {
+                                                action = MediaProjectionForegroundService.ACTION_STOP
+                                            }
+                                        )
+                                    }
+                                },
+                                onSelectRoute = viewModel::setRoute,
+                                onOpenHistory = { navController.navigate(ROUTE_HANAKO_HISTORY) }
+                            )
+                        },
+                        settingsContent = {
+                            SettingsMenuScreen(
+                                onNavigateProvider = { navController.navigate(ROUTE_SETTINGS_PROVIDER) },
+                                onNavigateModel = { navController.navigate(ROUTE_SETTINGS_MODEL) },
+                                onNavigateAssistant = { navController.navigate(ROUTE_SETTINGS_ASSISTANT) },
+                                onNavigateAutomation = { navController.navigate(ROUTE_SETTINGS_AUTOMATION) }
+                            )
+                        }
+                    )
+                }
+                composable(ROUTE_HANAKO_HISTORY) {
+                    HistorySubScreen(
+                        settings = settings,
+                        onClearHistory = viewModel::clearHistory,
+                        onDeleteHistoryItem = viewModel::deleteHistoryItem,
+                        onOpenHistoryDetail = { resultId ->
+                            navController.navigate(historyDetailRoute(resultId))
+                        }
+                    )
+                }
+                composable("$ROUTE_HANAKO_HISTORY_DETAIL/{$ARG_HISTORY_ID}") { entry ->
+                    val resultId = entry.arguments?.getString(ARG_HISTORY_ID)
+                    val result = settings.history.firstOrNull { it.id == resultId }
+                    HistoryDetailScreen(result = result)
+                }
+                composable(ROUTE_SETTINGS_PROVIDER) {
+                    ProviderSettingsScreen(
+                        settings = settings,
+                        onAddProvider = viewModel::addProvider,
+                        onDeleteProvider = viewModel::deleteProvider,
+                        onOpenProvider = { providerId ->
+                            viewModel.selectProvider(providerId)
+                            navController.navigate(providerDetailRoute(providerId))
+                        }
+                    )
+                }
+                composable("$ROUTE_SETTINGS_PROVIDER_DETAIL/{$ARG_PROVIDER_ID}") { entry ->
+                    val providerId = entry.arguments?.getString(ARG_PROVIDER_ID)
+                    val provider = settings.providers.firstOrNull { it.id == providerId }
+                    if (provider != null) {
+                        ProviderDetailScreen(
+                            provider = provider,
                             onUpdateProvider = viewModel::updateProvider,
-                            onAddProvider = viewModel::addProvider,
-                            onDeleteProvider = viewModel::deleteProvider,
-                            onOpenModelSettings = { settingsNavController.navigate(ROUTE_SETTINGS_MODEL) },
-                            onPreviewProviderModels = { providerModelsPreviewId = it },
-                            onPickModel = { providerPickerTarget = it },
-                            onSelectAssistant = viewModel::selectAssistant,
-                            onUpdateAssistant = viewModel::updateAssistant,
-                            onAddAssistant = viewModel::addAssistant,
-                            onDeleteAssistant = viewModel::deleteAssistant,
-                            onUpdateModelSelection = viewModel::updateModelSelection,
-                            onToggleCompletionNotification = { enabled ->
-                                viewModel.updateAutomationSettings {
-                                    it.copy(completionNotificationEnabled = enabled)
-                                }
-                            }
+                            onViewModels = { providerModelsPreviewId = provider.id }
                         )
                     }
+                }
+                composable(ROUTE_SETTINGS_MODEL) {
+                    ModelSettingsScreen(
+                        settings = settings,
+                        onPickModel = { providerPickerTarget = it }
+                    )
+                }
+                composable(ROUTE_SETTINGS_ASSISTANT) {
+                    AssistantSettingsScreen(
+                        settings = settings,
+                        onAddAssistant = viewModel::addAssistant,
+                        onDeleteAssistant = viewModel::deleteAssistant,
+                        onOpenAssistant = { assistantId ->
+                            viewModel.selectAssistant(assistantId)
+                            navController.navigate(assistantDetailRoute(assistantId))
+                        }
+                    )
+                }
+                composable("$ROUTE_SETTINGS_ASSISTANT_DETAIL/{$ARG_ASSISTANT_ID}") { entry ->
+                    val assistantId = entry.arguments?.getString(ARG_ASSISTANT_ID)
+                    val assistant = settings.assistants.firstOrNull { it.id == assistantId }
+                    if (assistant != null) {
+                        AssistantDetailScreen(
+                            assistant = assistant,
+                            onUpdateAssistant = viewModel::updateAssistant
+                        )
+                    }
+                }
+                composable(ROUTE_SETTINGS_AUTOMATION) {
+                    AutomationSettingsScreen(
+                        settings = settings.automation,
+                        onToggleCompletionNotification = { enabled ->
+                            viewModel.updateAutomationSettings {
+                                it.copy(completionNotificationEnabled = enabled)
+                            }
+                        }
+                    )
                 }
             }
         }
@@ -444,221 +441,121 @@ fun HanakoApp(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun HanakoNavHost(
-    navController: androidx.navigation.NavController,
+private fun MainShellScreen(
+    currentScreen: Screen,
+    onScreenChange: (Screen) -> Unit,
+    hanakoContent: @Composable () -> Unit,
+    settingsContent: @Composable () -> Unit
+) {
+    val pagerState = rememberPagerState(
+        initialPage = currentScreen.ordinal,
+        pageCount = { Screen.entries.size }
+    )
+
+    LaunchedEffect(currentScreen) {
+        if (pagerState.targetPage != currentScreen.ordinal && pagerState.currentPage != currentScreen.ordinal) {
+            pagerState.animateScrollToPage(currentScreen.ordinal)
+        }
+    }
+
+    LaunchedEffect(pagerState.settledPage) {
+        val settledScreen = Screen.entries[pagerState.settledPage]
+        if (currentScreen != settledScreen) {
+            onScreenChange(settledScreen)
+        }
+    }
+
+    HorizontalPager(
+        state = pagerState,
+        modifier = Modifier.fillMaxSize()
+    ) { page ->
+        when (Screen.entries[page]) {
+            Screen.Hanako -> hanakoContent()
+            Screen.Settings -> settingsContent()
+        }
+    }
+}
+
+@Composable
+private fun HanakoHomeScreen(
     settings: `fun`.kirari.hanako.data.AppSettings,
     overlayEnabled: Boolean,
     hasOverlayPermission: Boolean,
     onOpenOverlayPermission: () -> Unit,
     onToggleOverlay: (Boolean) -> Unit,
     onSelectRoute: (`fun`.kirari.hanako.data.ProcessingRoute) -> Unit,
-    onClearHistory: () -> Unit,
-    onDeleteHistoryItem: (String) -> Unit
+    onOpenHistory: () -> Unit
 ) {
     val context = LocalContext.current
-    NavHost(
-        navController = navController as androidx.navigation.NavHostController,
-        startDestination = ROUTE_HANAKO_HOME,
-        enterTransition = {
-            slideInHorizontally { it } + fadeIn()
-        },
-        exitTransition = {
-            slideOutHorizontally { -it / 2 } + fadeOut()
-        },
-        popEnterTransition = {
-            slideInHorizontally { -it / 2 } + fadeIn()
-        },
-        popExitTransition = {
-            slideOutHorizontally { it }
-        }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        composable(ROUTE_HANAKO_HOME) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                item {
-                    HeroSection(
-                        overlayEnabled = overlayEnabled,
-                        hasOverlayPermission = hasOverlayPermission,
-                        route = settings.processingRoute,
-                        onSelectRoute = onSelectRoute,
-                        onOpenOverlayPermission = onOpenOverlayPermission,
-                        onToggleOverlay = onToggleOverlay,
-                        onStartAutoMode = {
-                            if (!hasOverlayPermission) return@HeroSection
-                            context.startActivity(
-                                Intent(context, ProjectionPermissionActivity::class.java).apply {
-                                    putExtra(
-                                        ProjectionPermissionActivity.EXTRA_LAUNCH_MODE,
-                                        OverlayLaunchMode.AUTO.name
-                                    )
-                                }
+        item {
+            HeroSection(
+                overlayEnabled = overlayEnabled,
+                hasOverlayPermission = hasOverlayPermission,
+                route = settings.processingRoute,
+                onSelectRoute = onSelectRoute,
+                onOpenOverlayPermission = onOpenOverlayPermission,
+                onToggleOverlay = onToggleOverlay,
+                onStartAutoMode = {
+                    if (!hasOverlayPermission) return@HeroSection
+                    context.startActivity(
+                        Intent(context, ProjectionPermissionActivity::class.java).apply {
+                            putExtra(
+                                ProjectionPermissionActivity.EXTRA_LAUNCH_MODE,
+                                OverlayLaunchMode.AUTO.name
                             )
                         }
                     )
                 }
+            )
+        }
 
-                item {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(onClick = { navController.navigate(ROUTE_HANAKO_HISTORY) }),
-                        shape = RoundedCornerShape(24.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.History,
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "历史记录",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    "查看悬浮窗处理过的历史记录",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Icon(
-                                Icons.Default.ChevronRight,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.outline
-                            )
-                        }
+        item {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenHistory),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        Icons.Default.History,
+                        contentDescription = null,
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "历史记录",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "查看悬浮窗处理过的历史记录",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline
+                    )
                 }
+            }
+        }
 
-                item { Spacer(modifier = Modifier.height(80.dp)) }
-            }
-        }
-        composable(ROUTE_HANAKO_HISTORY) {
-            HistorySubScreen(
-                settings = settings,
-                onClearHistory = onClearHistory,
-                onDeleteHistoryItem = onDeleteHistoryItem,
-                onOpenHistoryDetail = { resultId ->
-                    navController.navigate(historyDetailRoute(resultId))
-                }
-            )
-        }
-        composable("$ROUTE_HANAKO_HISTORY_DETAIL/{$ARG_HISTORY_ID}") { backStackEntry ->
-            val resultId = backStackEntry.arguments?.getString(ARG_HISTORY_ID)
-            val result = settings.history.firstOrNull { it.id == resultId }
-            HistoryDetailScreen(result = result)
-        }
-    }
-}
-
-@Composable
-private fun SettingsNavHost(
-    navController: androidx.navigation.NavController,
-    settings: `fun`.kirari.hanako.data.AppSettings,
-    onSelectProvider: (String) -> Unit,
-    onUpdateProvider: (`fun`.kirari.hanako.data.ModelProviderConfig) -> Unit,
-    onAddProvider: () -> Unit,
-    onDeleteProvider: (String) -> Unit,
-    onOpenModelSettings: () -> Unit,
-    onPreviewProviderModels: (String) -> Unit,
-    onPickModel: (ModelPurpose) -> Unit,
-    onSelectAssistant: (String) -> Unit,
-    onUpdateAssistant: (`fun`.kirari.hanako.data.AssistantPreset) -> Unit,
-    onAddAssistant: () -> Unit,
-    onDeleteAssistant: (String) -> Unit,
-    onUpdateModelSelection: (ModelPurpose, ModelSelection) -> Unit,
-    onToggleCompletionNotification: (Boolean) -> Unit
-) {
-    NavHost(
-        navController = navController as androidx.navigation.NavHostController,
-        startDestination = ROUTE_SETTINGS_MENU,
-        enterTransition = {
-            slideInHorizontally { it } + fadeIn()
-        },
-        exitTransition = {
-            slideOutHorizontally { -it / 2 } + fadeOut()
-        },
-        popEnterTransition = {
-            slideInHorizontally { -it / 2 } + fadeIn()
-        },
-        popExitTransition = {
-            slideOutHorizontally { it }
-        }
-    ) {
-        composable(ROUTE_SETTINGS_MENU) {
-            SettingsMenuScreen(
-                onNavigateProvider = { navController.navigate(ROUTE_SETTINGS_PROVIDER) },
-                onNavigateModel = { navController.navigate(ROUTE_SETTINGS_MODEL) },
-                onNavigateAssistant = { navController.navigate(ROUTE_SETTINGS_ASSISTANT) },
-                onNavigateAutomation = { navController.navigate(ROUTE_SETTINGS_AUTOMATION) }
-            )
-        }
-        composable(ROUTE_SETTINGS_PROVIDER) {
-            ProviderSettingsScreen(
-                settings = settings,
-                onAddProvider = onAddProvider,
-                onDeleteProvider = onDeleteProvider,
-                onOpenProvider = { providerId ->
-                    onSelectProvider(providerId)
-                    navController.navigate(providerDetailRoute(providerId))
-                }
-            )
-        }
-        composable("$ROUTE_SETTINGS_PROVIDER_DETAIL/{$ARG_PROVIDER_ID}") { backStackEntry ->
-            val providerId = backStackEntry.arguments?.getString(ARG_PROVIDER_ID)
-            val provider = settings.providers.firstOrNull { it.id == providerId }
-            if (provider != null) {
-                ProviderDetailScreen(
-                    provider = provider,
-                    onUpdateProvider = onUpdateProvider,
-                    onViewModels = { onPreviewProviderModels(provider.id) }
-                )
-            }
-        }
-        composable(ROUTE_SETTINGS_MODEL) {
-            ModelSettingsScreen(
-                settings = settings,
-                onPickModel = onPickModel
-            )
-        }
-        composable(ROUTE_SETTINGS_ASSISTANT) {
-            AssistantSettingsScreen(
-                settings = settings,
-                onAddAssistant = onAddAssistant,
-                onDeleteAssistant = onDeleteAssistant,
-                onOpenAssistant = { assistantId ->
-                    onSelectAssistant(assistantId)
-                    navController.navigate(assistantDetailRoute(assistantId))
-                }
-            )
-        }
-        composable(ROUTE_SETTINGS_AUTOMATION) {
-            AutomationSettingsScreen(
-                settings = settings.automation,
-                onToggleCompletionNotification = onToggleCompletionNotification
-            )
-        }
-        composable("$ROUTE_SETTINGS_ASSISTANT_DETAIL/{$ARG_ASSISTANT_ID}") { backStackEntry ->
-            val assistantId = backStackEntry.arguments?.getString(ARG_ASSISTANT_ID)
-            val assistant = settings.assistants.firstOrNull { it.id == assistantId }
-            if (assistant != null) {
-                AssistantDetailScreen(
-                    assistant = assistant,
-                    onUpdateAssistant = onUpdateAssistant
-                )
-            }
-        }
+        item { Spacer(modifier = Modifier.height(80.dp)) }
     }
 }
 
