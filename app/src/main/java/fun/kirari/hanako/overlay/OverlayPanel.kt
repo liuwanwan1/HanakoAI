@@ -2,9 +2,20 @@ package `fun`.kirari.hanako.overlay
 
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,9 +26,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
@@ -35,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color as ComposeColor
@@ -46,8 +62,16 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import `fun`.kirari.hanako.data.AssistantPreset
 import `fun`.kirari.hanako.data.ProcessingRoute
+import kotlinx.coroutines.delay
 import kotlin.math.abs
+
+private enum class AssistantSwitchDirection {
+    PREVIOUS,
+    NEXT,
+    PICKER
+}
 
 @Composable
 internal fun OverlayPanel(
@@ -68,7 +92,10 @@ internal fun OverlayPanel(
                 uiState = uiState,
                 onClose = onDismiss,
                 onConfirm = viewModel::process,
-                panelHeightPx = panelHeightPx
+                panelHeightPx = panelHeightPx,
+                onSelectAssistant = viewModel::selectAssistant,
+                onSelectPreviousAssistant = viewModel::selectPreviousAssistant,
+                onSelectNextAssistant = viewModel::selectNextAssistant
             )
         }
 
@@ -87,7 +114,10 @@ private fun CropOverlaySheet(
     uiState: OverlayUiState,
     onClose: () -> Unit,
     onConfirm: (Bitmap) -> Unit,
-    panelHeightPx: Int
+    panelHeightPx: Int,
+    onSelectAssistant: (String) -> Unit,
+    onSelectPreviousAssistant: () -> Unit,
+    onSelectNextAssistant: () -> Unit
 ) {
     val bitmap = uiState.screenshot
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -98,6 +128,9 @@ private fun CropOverlaySheet(
     val routeText = if (uiState.settings.processingRoute == ProcessingRoute.OCR_THEN_LLM) "先 OCR 再发送" else "直接发给多模态"
     val selectionColor = MaterialTheme.colorScheme.primary
     val panelMaxHeight = with(density) { panelHeightPx.toDp() }
+    var showAssistantDialog by remember { mutableStateOf(false) }
+    var assistantPickerClosing by remember { mutableStateOf(false) }
+    var switchDirection by remember { mutableStateOf(AssistantSwitchDirection.PICKER) }
 
     Box(
         modifier = Modifier
@@ -110,7 +143,7 @@ private fun CropOverlaySheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(panelMaxHeight)
-                .align(Alignment.TopCenter),
+                .align(Alignment.BottomCenter),
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             tonalElevation = 8.dp
         ) {
@@ -125,10 +158,24 @@ private fun CropOverlaySheet(
                         .padding(start = 20.dp, top = 52.dp, end = 20.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    SheetTitleRow(
-                        title = "助手：${selectedAssistant?.name.orEmpty()}",
+                    CropHeaderRow(
+                        assistantName = selectedAssistant?.name.orEmpty(),
+                        hasMultipleAssistants = uiState.settings.assistants.size > 1,
+                        switchDirection = switchDirection,
+                        onSelectPrevious = {
+                            switchDirection = AssistantSwitchDirection.PREVIOUS
+                            onSelectPreviousAssistant()
+                        },
+                        onSelectNext = {
+                            switchDirection = AssistantSwitchDirection.NEXT
+                            onSelectNextAssistant()
+                        },
+                        onOpenPicker = {
+                            assistantPickerClosing = false
+                            showAssistantDialog = true
+                        },
                         onClose = {
-                            if (closeRequested) return@SheetTitleRow
+                            if (closeRequested) return@CropHeaderRow
                             closeRequested = true
                             onClose()
                         }
@@ -225,6 +272,24 @@ private fun CropOverlaySheet(
         @Suppress("UNUSED_EXPRESSION")
         closeRequested
     }
+
+    if (showAssistantDialog) {
+        AssistantPickerOverlay(
+            assistants = uiState.settings.assistants,
+            selectedAssistantId = uiState.settings.selectedAssistantId,
+            closing = assistantPickerClosing,
+            onDismiss = { assistantPickerClosing = true },
+            onDismissFinished = {
+                showAssistantDialog = false
+                assistantPickerClosing = false
+            },
+            onSelect = { assistantId ->
+                switchDirection = AssistantSwitchDirection.PICKER
+                onSelectAssistant(assistantId)
+                assistantPickerClosing = true
+            }
+        )
+    }
 }
 
 @Composable
@@ -248,7 +313,7 @@ private fun ResultOverlaySheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(panelMaxHeight)
-                .align(Alignment.TopCenter),
+                .align(Alignment.BottomCenter),
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             tonalElevation = 8.dp
         ) {
@@ -265,7 +330,9 @@ private fun ResultOverlaySheet(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     SheetTitleRow(
-                        title = "处理中",
+                        title = {
+                            Text("处理中")
+                        },
                         style = MaterialTheme.typography.titleLarge,
                         onClose = {
                             if (closeRequested) return@SheetTitleRow
@@ -325,24 +392,263 @@ private fun ResultOverlaySheet(
 }
 
 @Composable
+private fun CropHeaderRow(
+    assistantName: String,
+    hasMultipleAssistants: Boolean,
+    switchDirection: AssistantSwitchDirection,
+    onSelectPrevious: () -> Unit,
+    onSelectNext: () -> Unit,
+    onOpenPicker: () -> Unit,
+    onClose: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 16.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            AssistantSwitcher(
+                assistantName = assistantName,
+                hasMultipleAssistants = hasMultipleAssistants,
+                switchDirection = switchDirection,
+                onSelectPrevious = onSelectPrevious,
+                onSelectNext = onSelectNext,
+                onOpenPicker = onOpenPicker
+            )
+        }
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier
+                .size(36.dp)
+        ) {
+            Text("×", style = MaterialTheme.typography.titleLarge)
+        }
+    }
+}
+
+@Composable
 private fun SheetTitleRow(
-    title: String,
+    title: @Composable () -> Unit,
     style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.titleMedium,
     onClose: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, style = style, modifier = Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalTextStyle provides style
+            ) {
+                title()
+            }
+        }
         IconButton(
             onClick = onClose,
-            modifier = Modifier
-                .padding(start = 12.dp)
-                .size(36.dp)
+            modifier = Modifier.size(36.dp)
         ) {
             Text("×", style = MaterialTheme.typography.titleLarge)
+        }
+    }
+}
+
+@Composable
+private fun AssistantSwitcher(
+    assistantName: String,
+    hasMultipleAssistants: Boolean,
+    switchDirection: AssistantSwitchDirection,
+    onSelectPrevious: () -> Unit,
+    onSelectNext: () -> Unit,
+    onOpenPicker: () -> Unit
+) {
+    Row(
+        modifier = Modifier.wrapContentWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (hasMultipleAssistants) {
+            SwitchArrowButton(symbol = "〈", onClick = onSelectPrevious)
+        }
+        Box(
+            modifier = Modifier
+                .width(168.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .clickable(onClick = onOpenPicker)
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            AnimatedContent(
+                targetState = assistantName,
+                transitionSpec = {
+                    assistantNameTransform(switchDirection)
+                },
+                label = "assistantName"
+            ) { currentAssistantName ->
+                Text(
+                    text = "助手：$currentAssistantName",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1
+                )
+            }
+        }
+        if (hasMultipleAssistants) {
+            SwitchArrowButton(symbol = "〉", onClick = onSelectNext)
+        }
+    }
+}
+
+@Composable
+private fun SwitchArrowButton(
+    symbol: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.size(width = 36.dp, height = 36.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(symbol, style = MaterialTheme.typography.bodyLarge)
+        }
+    }
+}
+
+private fun assistantNameTransform(
+    direction: AssistantSwitchDirection
+): ContentTransform {
+    val slideSpec = tween<androidx.compose.ui.unit.IntOffset>(
+        durationMillis = 240,
+        easing = FastOutSlowInEasing
+    )
+    val fadeSpec = tween<Float>(
+        durationMillis = 180,
+        easing = FastOutSlowInEasing
+    )
+    return when (direction) {
+        AssistantSwitchDirection.PREVIOUS ->
+            (slideInHorizontally(animationSpec = slideSpec) { -it / 2 } + fadeIn(fadeSpec))
+                .togetherWith(slideOutHorizontally(animationSpec = slideSpec) { it / 2 } + fadeOut(fadeSpec))
+
+        AssistantSwitchDirection.NEXT ->
+            (slideInHorizontally(animationSpec = slideSpec) { it / 2 } + fadeIn(fadeSpec))
+                .togetherWith(slideOutHorizontally(animationSpec = slideSpec) { -it / 2 } + fadeOut(fadeSpec))
+
+        AssistantSwitchDirection.PICKER ->
+            fadeIn(fadeSpec).togetherWith(fadeOut(fadeSpec))
+    }
+}
+
+@Composable
+private fun AssistantPickerOverlay(
+    assistants: List<AssistantPreset>,
+    selectedAssistantId: String?,
+    closing: Boolean,
+    onDismiss: () -> Unit,
+    onDismissFinished: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        visible = true
+    }
+    LaunchedEffect(closing) {
+        if (closing) {
+            visible = false
+            delay(220)
+            onDismissFinished()
+        }
+    }
+    val overlayAlpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "assistantPickerOverlayAlpha"
+    )
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "assistantPickerCardAlpha"
+    )
+    val cardTranslationY by animateFloatAsState(
+        targetValue = if (visible) 0f else if (closing) -20f else 20f,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "assistantPickerCardTranslationY"
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ComposeColor.Black.copy(alpha = 0.28f * overlayAlpha))
+            .clickable(onClick = {
+                if (!closing) onDismiss()
+            }),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .width(300.dp)
+                .graphicsLayer {
+                    alpha = cardAlpha
+                    translationY = cardTranslationY * density
+                }
+                .clickable(enabled = false, onClick = { })
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("选择助手", style = MaterialTheme.typography.titleMedium)
+                LazyColumn(
+                    modifier = Modifier.height(320.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(assistants, key = { it.id }) { assistant ->
+                        Surface(
+                            onClick = { onSelect(assistant.id) },
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (assistant.id == selectedAssistantId) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            }
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(assistant.name, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    assistant.systemPrompt.replace('\n', ' '),
+                                    maxLines = 2,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        if (!closing) onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("关闭")
+                }
+            }
         }
     }
 }

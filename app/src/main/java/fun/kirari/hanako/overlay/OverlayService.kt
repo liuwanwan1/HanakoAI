@@ -41,6 +41,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -227,8 +228,8 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         panelScreenHeightPx = screenHeightPx
         panelHeightPx = targetHeightPx
         panelDockHeightPx = dockHeightPx
-        panelHandleHeightPx = (76f * density).roundToInt()
-        panelHandleWidthPx = (140f * density).roundToInt()
+        panelHandleHeightPx = (28f * density).roundToInt()
+        panelHandleWidthPx = (88f * density).roundToInt()
         if (panelView == null) {
             panelCurrentHeightPx = dockHeightPx
         } else {
@@ -374,8 +375,6 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         val handleParams = panelHandleParams
         if (panelHeightPx <= 0 || panelScreenHeightPx <= 0) return
         panelCurrentHeightPx = heightPx.coerceIn(0, panelHeightPx)
-        view.translationY = 0f
-        panelContentView?.translationY = 0f
         if (params != null) {
             params.y = (panelScreenHeightPx - panelCurrentHeightPx).coerceAtLeast(0)
             params.height = panelCurrentHeightPx.coerceAtLeast(1)
@@ -399,26 +398,57 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
     ) {
         panelAnimationJob?.cancel()
         panelAnimationJob = serviceScope.launch {
-            val durationMs = SheetAnimationDurationMs
-            val startTimeMs = android.os.SystemClock.uptimeMillis()
             val start = fromHeightPx.coerceIn(0, panelHeightPx.coerceAtLeast(fromHeightPx))
             val end = toHeightPx.coerceIn(0, panelHeightPx.coerceAtLeast(toHeightPx))
-            while (isActive) {
-                val elapsed = android.os.SystemClock.uptimeMillis() - startTimeMs
-                val fraction = (elapsed.toFloat() / durationMs).coerceIn(0f, 1f)
-                val eased = easeOutCubic(fraction)
-                val height = (start + (end - start) * eased).roundToInt()
-                updatePanelHeightAllowZero(height)
-                if (fraction >= 1f) break
-                kotlinx.coroutines.delay(16L)
-            }
+            animatePanelHeightSegment(
+                startHeightPx = start,
+                endHeightPx = end,
+                durationMs = SheetAnimationDurationMs,
+                easing = ::easeOutCubic,
+                logLabel = "panel"
+            )
             updatePanelHeightAllowZero(end)
+            Log.d("OverlayService", "panel animation end height=$end")
             onEnd?.invoke()
         }
     }
 
+    private suspend fun animatePanelHeightSegment(
+        startHeightPx: Int,
+        endHeightPx: Int,
+        durationMs: Int,
+        easing: (Float) -> Float,
+        logLabel: String
+    ) {
+        val startTimeMs = android.os.SystemClock.uptimeMillis()
+        var loggedStart = false
+        var loggedMid = false
+        while (currentCoroutineContext().isActive) {
+            val elapsed = android.os.SystemClock.uptimeMillis() - startTimeMs
+            val fraction = (elapsed.toFloat() / durationMs).coerceIn(0f, 1f)
+            val eased = easing(fraction)
+            val height = (startHeightPx + (endHeightPx - startHeightPx) * eased).roundToInt()
+            updatePanelHeightAllowZero(height)
+            if (!loggedStart) {
+                Log.d("OverlayService", "$logLabel fraction=${"%.2f".format(fraction)} height=$height")
+                loggedStart = true
+            } else if (!loggedMid && fraction >= 0.5f) {
+                Log.d("OverlayService", "$logLabel fraction=${"%.2f".format(fraction)} height=$height")
+                loggedMid = true
+            }
+            if (fraction >= 1f) break
+            kotlinx.coroutines.delay(16L)
+        }
+        updatePanelHeightAllowZero(endHeightPx)
+        Log.d("OverlayService", "$logLabel fraction=1.00 height=$endHeightPx")
+    }
+
     private fun updatePanelHeightAllowZero(heightPx: Int) {
         applyPanelHeight(heightPx)
+    }
+
+    private fun easeOutCubic(fraction: Float): Float {
+        return 1f - (1f - fraction).let { it * it * it }
     }
 
     private fun hidePanelWithAnimation() {

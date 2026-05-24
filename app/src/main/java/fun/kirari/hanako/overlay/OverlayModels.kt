@@ -6,7 +6,7 @@ import `fun`.kirari.hanako.data.AppSettings
 import `fun`.kirari.hanako.data.ProcessingResult
 
 internal val SheetDockOffset = 88.dp
-internal val PanelHandleYOffset = 34.dp
+internal val PanelHandleYOffset = 38.dp
 internal const val SheetAnimationDurationMs = 260
 
 internal enum class OverlaySheetMode {

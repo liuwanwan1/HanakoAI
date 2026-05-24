@@ -157,7 +157,12 @@ internal class OverlayViewModel(
                 }
             }.onSuccess { result ->
                 Log.d("OverlayService", "process success answer=${result.answer.length} ocr=${result.extractedText.length}")
-                store.update { it.copy(lastResult = result) }
+                store.update {
+                    it.copy(
+                        lastResult = result,
+                        history = (listOf(result) + it.history).take(20)
+                    )
+                }
                 _uiState.update {
                     it.copy(
                         working = false,
@@ -180,6 +185,36 @@ internal class OverlayViewModel(
 
     fun closeSheet() {
         _uiState.update { it.copy(sheetVisible = false, error = null) }
+    }
+
+    fun selectAssistant(assistantId: String) {
+        viewModelScope.launch {
+            store.update { current ->
+                if (current.assistants.any { it.id == assistantId }) {
+                    current.copy(selectedAssistantId = assistantId)
+                } else {
+                    current
+                }
+            }
+        }
+    }
+
+    fun selectPreviousAssistant() {
+        val current = _uiState.value.settings
+        val assistants = current.assistants
+        if (assistants.isEmpty()) return
+        val selectedIndex = assistants.indexOfFirst { it.id == current.selectedAssistantId }.takeIf { it >= 0 } ?: 0
+        val previousIndex = if (selectedIndex == 0) assistants.lastIndex else selectedIndex - 1
+        selectAssistant(assistants[previousIndex].id)
+    }
+
+    fun selectNextAssistant() {
+        val current = _uiState.value.settings
+        val assistants = current.assistants
+        if (assistants.isEmpty()) return
+        val selectedIndex = assistants.indexOfFirst { it.id == current.selectedAssistantId }.takeIf { it >= 0 } ?: 0
+        val nextIndex = if (selectedIndex == assistants.lastIndex) 0 else selectedIndex + 1
+        selectAssistant(assistants[nextIndex].id)
     }
 
     companion object {

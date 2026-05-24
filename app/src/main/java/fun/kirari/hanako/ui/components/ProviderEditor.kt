@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -114,9 +115,10 @@ private fun ProviderTypeSelector(
         )
         ExposedDropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 320.dp)
         ) {
-        ProviderKind.entries.forEach { item ->
+            ProviderKind.entries.forEach { item ->
                 DropdownMenuItem(
                     text = { Text(item.displayName) },
                     onClick = {

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
@@ -98,6 +99,8 @@ enum class Screen(val title: String, val icon: ImageVector) {
     Settings("设置", Icons.Default.Settings)
 }
 
+private const val ROUTE_HANAKO_HOME = "hanako_home"
+private const val ROUTE_HANAKO_HISTORY = "hanako_history"
 private const val ROUTE_SETTINGS_MENU = "settings_menu"
 private const val ROUTE_SETTINGS_PROVIDER = "settings_provider"
 private const val ROUTE_SETTINGS_PROVIDER_DETAIL = "settings_provider_detail"
@@ -122,6 +125,11 @@ private fun settingsTitle(route: String?): String = when (route) {
     }
 }
 
+private fun hanakoTitle(route: String?): String = when (route) {
+    ROUTE_HANAKO_HISTORY -> "历史记录"
+    else -> Screen.Hanako.title
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HanakoApp(viewModel: MainViewModel) {
@@ -137,7 +145,13 @@ fun HanakoApp(viewModel: MainViewModel) {
     var modelPickerProviderId by remember { mutableStateOf<String?>(null) }
 
     var currentScreen by rememberSaveable { mutableStateOf(Screen.Hanako) }
+    var pendingHanakoReset by rememberSaveable { mutableStateOf(false) }
+    var pendingSettingsReset by rememberSaveable { mutableStateOf(false) }
 
+    val hanakoNavController = rememberNavController()
+    val hanakoBackStackEntry by hanakoNavController.currentBackStackEntryAsState()
+    val hanakoRoute = hanakoBackStackEntry?.destination?.route
+    val inHanakoSubPage = hanakoRoute != null && hanakoRoute != ROUTE_HANAKO_HOME
     val settingsNavController = rememberNavController()
     val settingsBackStackEntry by settingsNavController.currentBackStackEntryAsState()
     val settingsRoute = settingsBackStackEntry?.destination?.route
@@ -164,6 +178,24 @@ fun HanakoApp(viewModel: MainViewModel) {
         }
     }
 
+    LaunchedEffect(currentScreen, hanakoRoute, pendingHanakoReset) {
+        if (currentScreen == Screen.Hanako && pendingHanakoReset && hanakoRoute != null) {
+            if (hanakoRoute != ROUTE_HANAKO_HOME) {
+                hanakoNavController.popBackStack(ROUTE_HANAKO_HOME, inclusive = false)
+            }
+            pendingHanakoReset = false
+        }
+    }
+
+    LaunchedEffect(currentScreen, settingsRoute, pendingSettingsReset) {
+        if (currentScreen == Screen.Settings && pendingSettingsReset && settingsRoute != null) {
+            if (settingsRoute != ROUTE_SETTINGS_MENU) {
+                settingsNavController.popBackStack(ROUTE_SETTINGS_MENU, inclusive = false)
+            }
+            pendingSettingsReset = false
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -181,14 +213,24 @@ fun HanakoApp(viewModel: MainViewModel) {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            if (currentScreen == Screen.Settings) settingsTitle(settingsRoute) else currentScreen.title,
+                            when (currentScreen) {
+                                Screen.Settings -> settingsTitle(settingsRoute)
+                                Screen.Hanako -> hanakoTitle(hanakoRoute)
+                            },
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     },
                     navigationIcon = {
-                        if (currentScreen == Screen.Settings && inSettingsSubPage) {
-                            IconButton(onClick = { settingsNavController.popBackStack() }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        when {
+                            currentScreen == Screen.Hanako && inHanakoSubPage -> {
+                                IconButton(onClick = { hanakoNavController.popBackStack() }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                                }
+                            }
+                            currentScreen == Screen.Settings && inSettingsSubPage -> {
+                                IconButton(onClick = { settingsNavController.popBackStack() }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                                }
                             }
                         }
                     },
@@ -202,7 +244,18 @@ fun HanakoApp(viewModel: MainViewModel) {
                     Screen.entries.forEach { screen ->
                         NavigationBarItem(
                             selected = currentScreen == screen,
-                            onClick = { currentScreen = screen },
+                            onClick = {
+                                when (screen) {
+                                    Screen.Hanako -> {
+                                        pendingHanakoReset = true
+                                        currentScreen = Screen.Hanako
+                                    }
+                                    Screen.Settings -> {
+                                        pendingSettingsReset = true
+                                        currentScreen = Screen.Settings
+                                    }
+                                }
+                            },
                             icon = { Icon(screen.icon, contentDescription = screen.title) },
                             label = {
                                 AnimatedContent(
@@ -225,11 +278,12 @@ fun HanakoApp(viewModel: MainViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                userScrollEnabled = !inSettingsSubPage
+                userScrollEnabled = !inSettingsSubPage && !inHanakoSubPage
             ) {
                 when (Screen.entries[it]) {
                     Screen.Hanako -> {
-                        HanakoScreen(
+                        HanakoNavHost(
+                            navController = hanakoNavController,
                             settings = settings,
                             overlayEnabled = overlayEnabled,
                             onOpenOverlayPermission = {
@@ -270,6 +324,7 @@ fun HanakoApp(viewModel: MainViewModel) {
                             onSelectAssistant = viewModel::selectAssistant,
                             onUpdateAssistant = viewModel::updateAssistant,
                             onAddAssistant = viewModel::addAssistant,
+                            onDeleteAssistant = viewModel::deleteAssistant,
                             onUpdateModelSelection = viewModel::updateModelSelection
                         )
                     }
@@ -357,7 +412,8 @@ fun HanakoApp(viewModel: MainViewModel) {
 }
 
 @Composable
-fun HanakoScreen(
+private fun HanakoNavHost(
+    navController: androidx.navigation.NavController,
     settings: `fun`.kirari.hanako.data.AppSettings,
     overlayEnabled: Boolean,
     onOpenOverlayPermission: () -> Unit,
@@ -365,47 +421,147 @@ fun HanakoScreen(
     onSelectRoute: (`fun`.kirari.hanako.data.ProcessingRoute) -> Unit,
     onClearHistory: () -> Unit
 ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        item {
-            HeroSection(
-                overlayEnabled = overlayEnabled,
-                route = settings.processingRoute,
-                onSelectRoute = onSelectRoute,
-                onOpenOverlayPermission = onOpenOverlayPermission,
-                onToggleOverlay = onToggleOverlay
-            )
+    NavHost(
+        navController = navController as androidx.navigation.NavHostController,
+        startDestination = ROUTE_HANAKO_HOME,
+        enterTransition = {
+            slideInHorizontally { it } + fadeIn()
+        },
+        exitTransition = {
+            slideOutHorizontally { -it / 2 } + fadeOut()
+        },
+        popEnterTransition = {
+            slideInHorizontally { -it / 2 } + fadeIn()
+        },
+        popExitTransition = {
+            slideOutHorizontally { it }
         }
-
-        if (settings.history.isNotEmpty()) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "最近历史",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
+    ) {
+        composable(ROUTE_HANAKO_HOME) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                item {
+                    HeroSection(
+                        overlayEnabled = overlayEnabled,
+                        route = settings.processingRoute,
+                        onSelectRoute = onSelectRoute,
+                        onOpenOverlayPermission = onOpenOverlayPermission,
+                        onToggleOverlay = onToggleOverlay
                     )
-                    TextButton(onClick = onClearHistory) {
-                        Text("清空")
+                }
+
+                item {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = { navController.navigate(ROUTE_HANAKO_HISTORY) }),
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(20.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.History,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "历史记录",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "查看悬浮窗处理过的历史记录",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                        }
                     }
                 }
-            }
 
+                item { Spacer(modifier = Modifier.height(80.dp)) }
+            }
+        }
+        composable(ROUTE_HANAKO_HISTORY) {
+            HistorySubScreen(
+                settings = settings,
+                onClearHistory = onClearHistory
+            )
+        }
+    }
+}
+
+@Composable
+private fun HistorySubScreen(
+    settings: `fun`.kirari.hanako.data.AppSettings,
+    onClearHistory: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "历史记录",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(
+                    onClick = onClearHistory,
+                    enabled = settings.history.isNotEmpty()
+                ) {
+                    Text("清空")
+                }
+            }
+        }
+        if (settings.history.isEmpty()) {
+            item {
+                SectionCard(title = "暂无历史") {
+                    Text(
+                        "悬浮窗处理过的记录会显示在这里。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
             items(settings.history.size) { index ->
                 val result = settings.history[index]
                 SectionCard(title = "助手：${result.assistantName}") {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (result.route == `fun`.kirari.hanako.data.ProcessingRoute.OCR_THEN_LLM) "模式：OCR" else "模式：多模态",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         if (result.extractedText.isNotBlank()) {
-                            Text("OCR：${result.extractedText}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                "OCR：${result.extractedText}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         MarkdownLatexText(
                             content = result.answer,
@@ -415,7 +571,6 @@ fun HanakoScreen(
                 }
             }
         }
-        
         item { Spacer(modifier = Modifier.height(80.dp)) }
     }
 }
@@ -434,6 +589,7 @@ private fun SettingsNavHost(
     onSelectAssistant: (String) -> Unit,
     onUpdateAssistant: (`fun`.kirari.hanako.data.AssistantPreset) -> Unit,
     onAddAssistant: () -> Unit,
+    onDeleteAssistant: (String) -> Unit,
     onUpdateModelSelection: (ModelPurpose, ModelSelection) -> Unit
 ) {
     NavHost(
@@ -491,6 +647,7 @@ private fun SettingsNavHost(
             AssistantSettingsScreen(
                 settings = settings,
                 onAddAssistant = onAddAssistant,
+                onDeleteAssistant = onDeleteAssistant,
                 onOpenAssistant = { assistantId ->
                     onSelectAssistant(assistantId)
                     navController.navigate(assistantDetailRoute(assistantId))
@@ -845,8 +1002,11 @@ private fun ProviderSelectDialog(
 fun AssistantSettingsScreen(
     settings: `fun`.kirari.hanako.data.AppSettings,
     onAddAssistant: () -> Unit,
+    onDeleteAssistant: (String) -> Unit,
     onOpenAssistant: (String) -> Unit
 ) {
+    var deleteTargetId by remember { mutableStateOf<String?>(null) }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -872,7 +1032,10 @@ fun AssistantSettingsScreen(
         items(settings.assistants.size, key = { index -> settings.assistants[index].id }) { index ->
             val assistant = settings.assistants[index]
             Surface(
-                onClick = { onOpenAssistant(assistant.id) },
+                modifier = Modifier.combinedClickable(
+                    onClick = { onOpenAssistant(assistant.id) },
+                    onLongClick = { deleteTargetId = assistant.id }
+                ),
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow
             ) {
@@ -906,7 +1069,35 @@ fun AssistantSettingsScreen(
         }
         item { Spacer(modifier = Modifier.height(80.dp)) }
     }
+
+    val deleteTarget = settings.assistants.firstOrNull { it.id == deleteTargetId }
+    if (deleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { deleteTargetId = null },
+            title = { Text("删除助手") },
+            text = { Text("确认删除 ${deleteTarget.name}？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteAssistant(deleteTarget.id)
+                        deleteTargetId = null
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTargetId = null }) {
+                    Text("取消")
+                }
+            },
+            icon = {
+                Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            }
+        )
+    }
 }
+
 
 @Composable
 fun AssistantDetailScreen(
