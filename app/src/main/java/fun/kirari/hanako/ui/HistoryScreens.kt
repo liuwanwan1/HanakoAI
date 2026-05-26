@@ -287,11 +287,34 @@ fun HistoryDetailScreen(result: ProcessingResult?) {
         }
         if (result.route == ProcessingRoute.OCR_THEN_LLM) {
             item {
-                HistoryResultCard(title = "OCR 结果") {
-                    Text(
-                        result.extractedText.ifBlank { "暂无内容" },
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                HistoryResultCard(
+                    title = "OCR 结果",
+                    action = {
+                        TextButton(
+                            onClick = {
+                                copyToClipboard(context, "Hanako OCR 原文", result.extractedText)
+                                Toast.makeText(context, "已复制 OCR 原文", Toast.LENGTH_SHORT).show()
+                            },
+                            enabled = result.extractedText.isNotBlank()
+                        ) {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.size(4.dp))
+                            Text("复制原文")
+                        }
+                    }
+                ) {
+                    if (result.extractedText.isNotBlank()) {
+                        MarkdownLatexText(
+                            content = result.extractedText,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        Text("暂无内容")
+                    }
                 }
             }
         }
