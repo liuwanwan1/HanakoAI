@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -62,7 +63,7 @@ internal class OpenAiChatAdapter(
                 } else {
                     val root = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull()
                         ?: return@stream null
-                    val choice = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                    val choice = (root["choices"] as? JsonArray)?.firstOrNull()?.jsonObject
                         ?: return@stream null
                     val delta = choice["delta"]?.jsonObject ?: return@stream null
 
@@ -71,7 +72,7 @@ internal class OpenAiChatAdapter(
                         trySend(LlmEvent.TextDelta(textDelta))
                     }
 
-                    delta["tool_calls"]?.jsonArray?.forEach { item ->
+                    (delta["tool_calls"] as? JsonArray)?.forEach { item ->
                         val toolCall = item.jsonObject
                         val index = toolCall["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
                         val function = toolCall["function"]?.jsonObject ?: return@forEach
