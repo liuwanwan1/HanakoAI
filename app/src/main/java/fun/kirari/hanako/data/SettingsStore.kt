@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import `fun`.kirari.hanako.debug.AppDebugLogStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flatMapConcat
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -19,15 +21,26 @@ class SettingsStore(private val context: Context) {
         encodeDefaults = true
     }
 
-    val settings: Flow<AppSettings> = context.dataStore.data.map { preferences ->
-        val raw = preferences[SETTINGS_KEY]
-        val appSettings = if (raw.isNullOrBlank()) {
-            AppSettings().normalize()
-        } else {
-            runCatching { json.decodeFromString<AppSettings>(raw).normalize() }.getOrElse { AppSettings().normalize() }
+    val settings: Flow<AppSettings> = context.dataStore.data
+        .map { preferences ->
+            val raw = preferences[SETTINGS_KEY]
+            if (raw.isNullOrBlank()) {
+                AppSettings().normalize()
+            } else {
+                runCatching { json.decodeFromString<AppSettings>(raw).normalize() }.getOrElse { AppSettings().normalize() }
+            }
         }
-        migrateHistoryImages(context, appSettings)
-    }
+        .flatMapConcat { appSettings ->
+            val migrated = migrateHistoryImages(appSettings)
+            if (migrated !== appSettings) {
+                flow {
+                    persistMigrated(migrated)
+                    emit(migrated)
+                }
+            } else {
+                flow { emit(appSettings) }
+            }
+        }
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         context.dataStore.edit { preferences ->
@@ -46,18 +59,30 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    private suspend fun persistMigrated(settings: AppSettings) {
+        context.dataStore.edit { preferences ->
+            preferences[SETTINGS_KEY] = json.encodeToString(AppSettings.serializer(), settings)
+        }
+    }
+
     companion object {
         private val SETTINGS_KEY = stringPreferencesKey("app_settings")
 
-        private suspend fun migrateHistoryImages(context: Context, settings: AppSettings): AppSettings {
+        private fun migrateHistoryImages(settings: AppSettings): AppSettings {
             val needsMigration = settings.history.any { it.screenshotBase64 != null && it.screenshotPath == null }
             if (!needsMigration) return settings
 
             val migratedHistory = settings.history.map { result ->
-                migrateBase64ToFile(context, result)
+                migrateBase64ToFile(result)
             }
-            val migratedLastResult = settings.lastResult?.let { migrateBase64ToFile(context, it) }
+            val migratedLastResult = settings.lastResult?.let { migrateBase64ToFile(it) }
             return settings.copy(history = migratedHistory, lastResult = migratedLastResult)
+        }
+
+        private fun migrateBase64ToFile(result: ProcessingResult): ProcessingResult {
+            if (result.screenshotPath != null) return result
+            val base64 = result.screenshotBase64 ?: return result
+            return result.copy(screenshotBase64 = null)
         }
     }
 }

@@ -44,7 +44,4 @@ internal data class OverlayUiState(
     val bubbleLetters: String? = null
 )
 
-internal fun easeOutCubic(fraction: Float): Float {
-    val inverse = 1f - fraction
-    return 1f - inverse * inverse * inverse
-}
+

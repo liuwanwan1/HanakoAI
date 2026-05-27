@@ -3,8 +3,6 @@ package `fun`.kirari.hanako.overlay
 import android.app.Service
 import android.animation.ObjectAnimator
 import android.content.res.ColorStateList
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Intent
 import android.animation.ValueAnimator
 import android.graphics.Color
@@ -43,6 +41,9 @@ import `fun`.kirari.hanako.R
 import `fun`.kirari.hanako.capture.MediaProjectionForegroundService
 import `fun`.kirari.hanako.capture.ProjectionPermissionActivity
 import `fun`.kirari.hanako.debug.AppDebugLogStore
+import `fun`.kirari.hanako.easeOutCubic
+import `fun`.kirari.hanako.copyToClipboard
+import `fun`.kirari.hanako.copyToClipboardWithToast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -83,14 +84,10 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
     private var panelView: FrameLayout? = null
     private var panelContentView: androidx.compose.ui.platform.ComposeView? = null
     private var panelHandleView: FrameLayout? = null
-    private var stableTestPanelView: FrameLayout? = null
-    private var stableTestHandleView: FrameLayout? = null
     private lateinit var overlayViewModel: OverlayViewModel
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var panelParams: WindowManager.LayoutParams? = null
     private var panelHandleParams: WindowManager.LayoutParams? = null
-    private var stableTestPanelParams: WindowManager.LayoutParams? = null
-    private var stableTestHandleParams: WindowManager.LayoutParams? = null
     private var panelScreenHeightPx: Int = 0
     private var panelHeightPx: Int = 0
     private var panelDockHeightPx: Int = 0
@@ -131,11 +128,9 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         when (intent?.action) {
             ACTION_STOP -> {
                 dismissPanel()
-                dismissStableTestPanel()
                 stopSelf()
             }
 
-            ACTION_TEST_SHEET_STABLE -> showStableTestPanel()
             else -> {
                 intent?.getStringExtra(ProjectionPermissionActivity.EXTRA_LAUNCH_MODE)
                     ?.let { runCatching { OverlayLaunchMode.valueOf(it) }.getOrNull() }
@@ -147,7 +142,6 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
 
     override fun onDestroy() {
         dismissPanel()
-        dismissStableTestPanel()
         bubbleColorAnimator?.cancel()
         bubbleColorAnimator = null
         bubbleCompletionResetJob?.cancel()
@@ -195,7 +189,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                             "auto completion handled completionId=$completionId copiedLabel=${state.autoCopiedLabel} bubble=${state.bubbleDisplayState}"
                         )
                         lastHandledCompletionId = completionId
-                        state.autoCopiedLabel?.let(::copyToClipboard)
+                        state.autoCopiedLabel?.let { copyToClipboard(this@OverlayService, "Hanako Auto Copy", it) }
                         if (state.settings.automation.completionNotificationEnabled) {
                             notifyAutomationCompleted(state.autoCopiedLabel)
                         }
@@ -335,13 +329,6 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         windowManager.addView(view, params)
         bubbleView = view
         updateBubbleAppearance(OverlayLaunchMode.NORMAL, AutoRunState.IDLE)
-    }
-
-    private fun copyToClipboard(label: String) {
-        AppDebugLogStore.i(logTag, "copyToClipboard text=$label")
-        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
-        clipboard.setPrimaryClip(ClipData.newPlainText("Hanako Auto Copy", label))
-        Toast.makeText(this, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
     }
 
     private fun showOrUpdatePanel(mode: OverlaySheetMode) {
@@ -565,10 +552,6 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         applyPanelHeight(heightPx)
     }
 
-    private fun easeOutCubic(fraction: Float): Float {
-        return 1f - (1f - fraction).let { it * it * it }
-    }
-
     private fun hidePanelWithAnimation() {
         if (panelClosing) return
         val view = panelView ?: return
@@ -774,126 +757,8 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         panelClosing = false
     }
 
-    private fun showStableTestPanel() {
-        dismissPanel()
-        dismissStableTestPanel()
-
-        val metrics = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        windowManager.defaultDisplay.getRealMetrics(metrics)
-        val screenHeightPx = metrics.heightPixels
-        val density = resources.displayMetrics.density
-        val minHeightPx = (88f * density).roundToInt()
-        val maxHeightPx = (screenHeightPx * 0.92f).roundToInt().coerceAtLeast(minHeightPx)
-        var currentHeightPx = (screenHeightPx * 0.36f).roundToInt().coerceIn(minHeightPx, maxHeightPx)
-
-        val visualParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            maxHeightPx,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = screenHeightPx - maxHeightPx
-        }
-
-        val visualRoot = FrameLayout(this)
-        val sheet = FrameLayout(this).apply {
-            background = GradientDrawable().apply {
-                setColor(Color.WHITE)
-                cornerRadii = floatArrayOf(
-                    28f * density, 28f * density,
-                    28f * density, 28f * density,
-                    0f, 0f,
-                    0f, 0f
-                )
-            }
-        }
-        visualRoot.addView(
-            sheet,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                maxHeightPx
-            )
-        )
-
-        val handleHeightPx = (56f * density).roundToInt()
-        val handleParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            handleHeightPx,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = screenHeightPx - currentHeightPx
-        }
-
-        fun applyHeight(heightPx: Int) {
-            currentHeightPx = heightPx.coerceIn(minHeightPx, maxHeightPx)
-            sheet.translationY = (maxHeightPx - currentHeightPx).toFloat()
-            handleParams.y = screenHeightPx - currentHeightPx
-            runCatching { windowManager.updateViewLayout(stableTestHandleView, handleParams) }
-        }
-
-        var dragStartRawY = 0f
-        var dragStartHeightPx = currentHeightPx
-        val handle = FrameLayout(this).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-            setOnTouchListener { _, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        dragStartRawY = event.rawY
-                        dragStartHeightPx = currentHeightPx
-                        true
-                    }
-
-                    MotionEvent.ACTION_MOVE -> {
-                        val nextHeight = (dragStartHeightPx - (event.rawY - dragStartRawY))
-                            .roundToInt()
-                            .coerceIn(minHeightPx, maxHeightPx)
-                        applyHeight(nextHeight)
-                        true
-                    }
-
-                    MotionEvent.ACTION_UP,
-                    MotionEvent.ACTION_CANCEL -> true
-
-                    else -> false
-                }
-            }
-        }
-
-        stableTestPanelParams = visualParams
-        stableTestHandleParams = handleParams
-        stableTestPanelView = visualRoot
-        stableTestHandleView = handle
-        sheet.translationY = (maxHeightPx - currentHeightPx).toFloat()
-        windowManager.addView(visualRoot, visualParams)
-        windowManager.addView(handle, handleParams)
-    }
-
-    private fun dismissStableTestPanel() {
-        stableTestHandleView?.let { view ->
-            runCatching { windowManager.removeView(view) }
-        }
-        stableTestPanelView?.let { view ->
-            runCatching { windowManager.removeView(view) }
-        }
-        stableTestHandleView = null
-        stableTestPanelView = null
-        stableTestHandleParams = null
-        stableTestPanelParams = null
-    }
-
     companion object {
         const val ACTION_STOP = "fun.kirari.hanako.overlay.STOP"
-        const val ACTION_TEST_SHEET_STABLE = "fun.kirari.hanako.overlay.TEST_SHEET_STABLE"
         internal const val CHANNEL_ID = "overlay_service"
         internal const val AUTOMATION_CHANNEL_ID = "overlay_automation"
         private const val NOTIFICATION_ID = 1001

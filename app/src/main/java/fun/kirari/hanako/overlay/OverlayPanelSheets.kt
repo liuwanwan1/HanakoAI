@@ -1,8 +1,6 @@
 package `fun`.kirari.hanako.overlay
 
 import android.graphics.Bitmap
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.widget.Toast
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
@@ -70,6 +68,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import `fun`.kirari.hanako.R
+import `fun`.kirari.hanako.copyToClipboardWithToast
 import `fun`.kirari.hanako.data.AssistantPreset
 import `fun`.kirari.hanako.data.previewPrompt
 import `fun`.kirari.hanako.data.ModelProviderConfig
@@ -485,8 +484,7 @@ internal fun ResultOverlaySheet(
                                     SmallHeaderAction(
                                         label = "复制原文",
                                         onClick = {
-                                            copyToClipboard(context, "Hanako OCR 原文", uiState.liveOcrText)
-                                            Toast.makeText(context, "已复制 OCR 原文", Toast.LENGTH_SHORT).show()
+                                            copyToClipboardWithToast(context, "Hanako OCR 原文", uiState.liveOcrText, "已复制 OCR 原文")
                                         }
                                     )
                                 }
@@ -513,10 +511,9 @@ internal fun ResultOverlaySheet(
                             if (!uiState.working && answerText.isNotBlank()) {
                                 SmallHeaderAction(
                                     label = "复制",
-                                    onClick = {
-                                        copyToClipboard(context, "Hanako 原始答案", answerText)
-                                        Toast.makeText(context, "已复制全文", Toast.LENGTH_SHORT).show()
-                                    }
+                                onClick = {
+                                    copyToClipboardWithToast(context, "Hanako 原始答案", answerText, "已复制全文")
+                                }
                                 )
                             }
                         }
@@ -1313,9 +1310,4 @@ private fun LoadingLine(text: String) {
         CircularProgressIndicator(strokeWidth = 2.dp)
         Text(text)
     }
-}
-
-private fun copyToClipboard(context: android.content.Context, label: String, text: String) {
-    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
 }

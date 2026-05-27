@@ -2,8 +2,6 @@
 
 package `fun`.kirari.hanako.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.Image
@@ -50,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import `fun`.kirari.hanako.data.AppSettings
+import `fun`.kirari.hanako.copyToClipboardWithToast
 import `fun`.kirari.hanako.data.AutomationActionType
 import `fun`.kirari.hanako.data.ProcessingResult
 import `fun`.kirari.hanako.data.ProcessingRoute
@@ -308,8 +307,7 @@ fun HistoryDetailScreen(result: ProcessingResult?) {
                     action = {
                         TextButton(
                             onClick = {
-                                copyToClipboard(context, "Hanako OCR 原文", result.extractedText)
-                                Toast.makeText(context, "已复制 OCR 原文", Toast.LENGTH_SHORT).show()
+                                copyToClipboardWithToast(context, "Hanako OCR 原文", result.extractedText, "已复制 OCR 原文")
                             },
                             enabled = result.extractedText.isNotBlank()
                         ) {
@@ -381,8 +379,7 @@ fun HistoryDetailScreen(result: ProcessingResult?) {
                     action = {
                         TextButton(
                             onClick = {
-                                copyToClipboard(context, "Hanako 自动模式工具内容", actionText)
-                                Toast.makeText(context, "已复制工具内容", Toast.LENGTH_SHORT).show()
+                                copyToClipboardWithToast(context, "Hanako 自动模式工具内容", actionText, "已复制工具内容")
                             },
                             enabled = actionText.isNotBlank()
                         ) {
@@ -408,8 +405,7 @@ fun HistoryDetailScreen(result: ProcessingResult?) {
                     action = {
                         TextButton(
                             onClick = {
-                                copyToClipboard(context, "Hanako 原始答案", result.answer)
-                                Toast.makeText(context, "已复制原文", Toast.LENGTH_SHORT).show()
+                                copyToClipboardWithToast(context, "Hanako 原始答案", result.answer, "已复制原文")
                             },
                             enabled = result.answer.isNotBlank()
                         ) {
@@ -533,9 +529,4 @@ private fun formatHistorySize(bytes: Long): String {
     if (kb < 1024.0) return String.format(java.util.Locale.US, "%.1fKB", kb)
     val mb = kb / 1024.0
     return String.format(java.util.Locale.US, "%.1fMB", mb)
-}
-
-private fun copyToClipboard(context: Context, label: String, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
 }

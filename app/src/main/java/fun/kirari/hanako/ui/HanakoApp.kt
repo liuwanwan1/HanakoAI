@@ -1,7 +1,5 @@
 package `fun`.kirari.hanako.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -82,6 +80,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import android.widget.Toast
 import `fun`.kirari.hanako.capture.ScreenCaptureManager
 import `fun`.kirari.hanako.capture.ScreenCaptureStartResult
+import `fun`.kirari.hanako.copyToClipboardWithToast
 import `fun`.kirari.hanako.data.LOCAL_OCR_MODEL_ID
 import `fun`.kirari.hanako.data.LOCAL_OCR_PROVIDER_ID
 import `fun`.kirari.hanako.data.ModelPurpose
@@ -89,6 +88,7 @@ import `fun`.kirari.hanako.data.ModelSelection
 import `fun`.kirari.hanako.data.ProcessingRoute
 import `fun`.kirari.hanako.data.displayName
 import `fun`.kirari.hanako.debug.AppDebugLogStore
+import `fun`.kirari.hanako.formatDebugTime
 import `fun`.kirari.hanako.overlay.OverlayLaunchMode
 import `fun`.kirari.hanako.overlay.OverlayRuntimeState
 import `fun`.kirari.hanako.overlay.OverlayService
@@ -524,10 +524,10 @@ fun HanakoApp(viewModel: MainViewModel) {
                     OutlinedButton(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = {
-                            copyLogs(
+                            copyToClipboardWithToast(
                                 context = context,
-                                text = if (localOcrLogText.isNotBlank()) localOcrLogText else "暂无 Local OCR 日志",
                                 label = "Hanako Local OCR Logs",
+                                text = if (localOcrLogText.isNotBlank()) localOcrLogText else "暂无 Local OCR 日志",
                                 toastText = "本地 OCR 日志已复制"
                             )
                         }
@@ -640,17 +640,6 @@ private fun MainShellScreen(
             }
         }
     }
-}
-
-private fun formatDebugTime(timestamp: Long): String {
-    return java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.getDefault())
-        .format(java.util.Date(timestamp))
-}
-
-private fun copyLogs(context: android.content.Context, text: String, label: String, toastText: String) {
-    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
-    Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
 }
 
 @Composable

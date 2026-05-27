@@ -3,6 +3,7 @@ package `fun`.kirari.hanako.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import `fun`.kirari.hanako.HanakoApplication
 import `fun`.kirari.hanako.data.AppSettings
 import `fun`.kirari.hanako.data.AssistantPreset
 import `fun`.kirari.hanako.data.AutomationSettings
@@ -12,7 +13,7 @@ import `fun`.kirari.hanako.data.ModelSelection
 import `fun`.kirari.hanako.data.ProcessingResult
 import `fun`.kirari.hanako.data.ProcessingRoute
 import `fun`.kirari.hanako.data.ScreenCaptureMethod
-import `fun`.kirari.hanako.data.SettingsStore
+import `fun`.kirari.hanako.data.SettingsRepository
 import `fun`.kirari.hanako.data.defaultAssistant
 import `fun`.kirari.hanako.data.defaultProvider
 import `fun`.kirari.hanako.debug.AppDebugLogStore
@@ -29,10 +30,11 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val store = SettingsStore(application)
-    private val localOcrManager = LocalOcrManager(application)
+    private val container = (application as HanakoApplication).container
+    private val repository: SettingsRepository = container.settingsRepository
+    private val localOcrManager: LocalOcrManager = container.localOcrManager
 
-    val settings: StateFlow<AppSettings> = store.settings.stateIn(
+    val settings: StateFlow<AppSettings> = repository.settings.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = AppSettings()
@@ -44,7 +46,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateProvider(provider: ModelProviderConfig) {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 current.copy(
                     providers = current.providers.map { if (it.id == provider.id) provider else it }
                 )
@@ -54,7 +56,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addProvider() {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 val provider = ModelProviderConfig(name = "自定义提供方 ${current.providers.size + 1}")
                 current.copy(
                     providers = current.providers + provider,
@@ -66,13 +68,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectProvider(providerId: String) {
         viewModelScope.launch {
-            store.update { it.copy(selectedProviderId = providerId) }
+            repository.update { it.copy(selectedProviderId = providerId) }
         }
     }
 
     fun deleteProvider(providerId: String) {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 val remaining = current.providers.filterNot { it.id == providerId }
                 val providers = if (remaining.isEmpty()) listOf(defaultProvider()) else remaining
                 val selectedProviderId = providers.firstOrNull()?.id
@@ -102,7 +104,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateAssistant(assistant: AssistantPreset) {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 current.copy(
                     assistants = current.assistants.map { if (it.id == assistant.id) assistant else it }
                 )
@@ -112,7 +114,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addAssistant() {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 val assistant = AssistantPreset(
                     id = UUID.randomUUID().toString(),
                     name = "自定义助手 ${current.assistants.size + 1}",
@@ -128,15 +130,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectAssistant(assistantId: String) {
-        viewModelScope.launch {
-            store.update { it.copy(selectedAssistantId = assistantId) }
-        }
-    }
+    fun selectAssistant(assistantId: String) = repository.selectAssistant(viewModelScope, assistantId)
 
     fun deleteAssistant(assistantId: String) {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 val remaining = current.assistants.filterNot { it.id == assistantId }
                 val assistants = if (remaining.isEmpty()) listOf(defaultAssistant()) else remaining
                 val selectedAssistantId = assistants.firstOrNull()?.id
@@ -150,36 +148,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setRoute(route: ProcessingRoute) {
         viewModelScope.launch {
-            store.update { it.copy(processingRoute = route) }
+            repository.update { it.copy(processingRoute = route) }
         }
     }
 
     fun setScreenCaptureMethod(method: ScreenCaptureMethod) {
         viewModelScope.launch {
-            store.update { it.copy(screenCaptureMethod = method) }
+            repository.update { it.copy(screenCaptureMethod = method) }
         }
     }
 
-    fun updateModelSelection(purpose: ModelPurpose, selection: ModelSelection) {
-        viewModelScope.launch {
-            store.update { current ->
-                when (purpose) {
-                    ModelPurpose.TEXT -> current.copy(textModelSelection = selection)
-                    ModelPurpose.VISION -> current.copy(visionModelSelection = selection)
-                    ModelPurpose.OCR -> current.copy(ocrModelSelection = selection)
-                }
-            }
-        }
-    }
-
-
+    fun updateModelSelection(purpose: ModelPurpose, selection: ModelSelection) =
+        repository.updateModelSelection(viewModelScope, purpose, selection)
 
     fun syncLocalOcrInstallation() {
         viewModelScope.launch {
             AppDebugLogStore.i("LocalOcrUi", "syncLocalOcrInstallation start")
             val status = withContext(Dispatchers.IO) { localOcrManager.installationStatus() }
             AppDebugLogStore.i("LocalOcrUi", "syncLocalOcrInstallation done installed=${status.installed}")
-            store.update { current ->
+            repository.update { current ->
                 current.copy(
                     localOcr = current.localOcr.copy(
                         installed = status.installed,
@@ -194,56 +181,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         purpose: ModelPurpose,
         selection: ModelSelection,
         favoriteModel: Boolean = false
-    ) {
-        viewModelScope.launch {
-            store.update { current ->
-                val next = when (purpose) {
-                    ModelPurpose.TEXT -> current.copy(textModelSelection = selection)
-                    ModelPurpose.VISION -> current.copy(visionModelSelection = selection)
-                    ModelPurpose.OCR -> current.copy(ocrModelSelection = selection)
-                }
-                if (!favoriteModel || selection.providerId == null || selection.model.isBlank()) {
-                    next
-                } else {
-                    next.updateProviderFavoriteModels(selection.providerId) { favorites ->
-                        favorites.addIfMissing(selection.model)
-                    }
-                }
-            }
-        }
-    }
+    ) = repository.updateModelSelectionWithFavorite(viewModelScope, purpose, selection, favoriteModel)
 
-    fun toggleFavoriteModel(providerId: String, modelId: String) {
-        val trimmedModelId = modelId.trim()
-        if (trimmedModelId.isBlank()) return
-        viewModelScope.launch {
-            store.update { current ->
-                current.updateProviderFavoriteModels(providerId) { favorites ->
-                    if (favorites.any { it.equals(trimmedModelId, ignoreCase = true) }) {
-                        favorites.removeByName(trimmedModelId)
-                    } else {
-                        favorites + trimmedModelId
-                    }
-                }
-            }
-        }
-    }
+    fun toggleFavoriteModel(providerId: String, modelId: String) =
+        repository.toggleFavoriteModel(viewModelScope, providerId, modelId)
 
-    fun removeFavoriteModel(providerId: String, modelId: String) {
-        val trimmedModelId = modelId.trim()
-        if (trimmedModelId.isBlank()) return
-        viewModelScope.launch {
-            store.update { current ->
-                current.updateProviderFavoriteModels(providerId) { favorites ->
-                    favorites.removeByName(trimmedModelId)
-                }
-            }
-        }
-    }
+    fun removeFavoriteModel(providerId: String, modelId: String) =
+        repository.removeFavoriteModel(viewModelScope, providerId, modelId)
 
     fun updateAutomationSettings(transform: (AutomationSettings) -> AutomationSettings) {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 val next = transform(current.automation)
                 current.copy(
                     automation = next.copy(autoModeTimeoutSeconds = next.autoModeTimeoutSeconds.coerceAtLeast(1))
@@ -254,13 +202,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearHistory() {
         viewModelScope.launch {
-            store.update { it.copy(history = emptyList(), lastResult = null) }
+            repository.update { it.copy(history = emptyList(), lastResult = null) }
         }
     }
 
     fun deleteHistoryItem(resultId: String) {
         viewModelScope.launch {
-            store.update { current ->
+            repository.update { current ->
                 val history = current.history.filterNot { it.id == resultId }
                 val lastResult = current.lastResult?.takeUnless { it.id == resultId }
                 current.copy(
@@ -273,7 +221,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveResult(result: ProcessingResult) {
         viewModelScope.launch {
-            store.update { it.copy(
+            repository.update { it.copy(
                 lastResult = result,
                 history = listOf(result) + it.history
             ) }
@@ -296,32 +244,4 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else -> selection.copy(providerId = null, model = "")
         }
     }
-}
-
-private fun AppSettings.updateProviderFavoriteModels(
-    providerId: String,
-    transform: (List<String>) -> List<String>
-): AppSettings {
-    return copy(
-        providers = providers.map { provider ->
-            if (provider.id != providerId) {
-                provider
-            } else {
-                provider.copy(
-                    favoriteModels = transform(provider.favoriteModels)
-                        .map(String::trim)
-                        .filter(String::isNotBlank)
-                        .distinctBy { it.lowercase() }
-                )
-            }
-        }
-    )
-}
-
-private fun List<String>.addIfMissing(modelId: String): List<String> {
-    return if (any { it.equals(modelId, ignoreCase = true) }) this else this + modelId
-}
-
-private fun List<String>.removeByName(modelId: String): List<String> {
-    return filterNot { it.equals(modelId, ignoreCase = true) }
 }

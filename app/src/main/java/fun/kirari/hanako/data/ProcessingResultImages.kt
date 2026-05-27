@@ -4,20 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
-import java.io.ByteArrayOutputStream
 import java.io.File
 
 private const val HISTORY_IMAGES_DIR = "history_images"
-
-fun Bitmap.toHistoryBase64(maxDimension: Int = 1280, quality: Int = 82): String {
-    val scaled = scaleDownIfNeeded(maxDimension)
-    val output = ByteArrayOutputStream()
-    scaled.compress(Bitmap.CompressFormat.JPEG, quality, output)
-    if (scaled !== this) {
-        scaled.recycle()
-    }
-    return Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
-}
 
 fun String.decodeHistoryBitmap(): Bitmap? {
     return runCatching {

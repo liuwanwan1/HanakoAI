@@ -33,10 +33,6 @@ internal object ScreenCaptureManager {
         ShizukuCaptureBackend
     ).associateBy(ScreenCaptureBackend::method)
 
-    fun sessionActiveFlow(method: ScreenCaptureMethod): StateFlow<Boolean> = backend(method).sessionActive
-
-    fun hasActiveSession(method: ScreenCaptureMethod): Boolean = backend(method).hasActiveSession()
-
     fun requestStart(
         context: Context,
         method: ScreenCaptureMethod,
