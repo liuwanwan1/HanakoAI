@@ -25,11 +25,11 @@ internal class UnifiedLLMClient(
         model: String,
         systemPrompt: String,
         userPrompt: String,
-        imageBase64: String? = null,
+        imagesBase64: List<String> = emptyList(),
         tools: List<ToolDef>? = null,
         firstDeltaTimeoutMillis: Long
     ): Flow<LlmEvent> {
-        AppDebugLogStore.i(tag, "stream provider=${provider.kind} model=$model hasImage=${imageBase64 != null} hasTools=${tools != null}")
+        AppDebugLogStore.i(tag, "stream provider=${provider.kind} model=$model imageCount=${imagesBase64.size} hasTools=${tools != null}")
         val adapter = adapters[provider.kind]
             ?: error("不支持的 provider: ${provider.kind}")
         return adapter.stream(
@@ -38,7 +38,7 @@ internal class UnifiedLLMClient(
                 model = model,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
-                imageBase64 = imageBase64,
+                imagesBase64 = imagesBase64,
                 tools = tools,
                 firstDeltaTimeoutMillis = firstDeltaTimeoutMillis
             )

@@ -8,14 +8,6 @@ data class AutomationResult(
     val action: AutomationActionRecord
 )
 
-internal enum class BubbleDisplayState {
-    IDLE,
-    RUNNING,
-    COPIED,
-    SHOWING_LETTERS,
-    SHOWING_LETTERS_PENDING_RESET
-}
-
 internal fun bubbleLettersAction(text: String): AutomationActionRecord =
     AutomationActionRecord(
         type = AutomationActionType.SHOW_BUBBLE_LETTERS,

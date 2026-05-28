@@ -144,9 +144,15 @@ data class ProcessingResult(
     val automationAction: AutomationActionRecord? = null,
     val screenshotBase64: String? = null,
     val screenshotPath: String? = null,
+    val screenshotPaths: List<String> = emptyList(),
     val events: List<ProcessingEvent> = emptyList(),
     val createdAtMillis: Long = System.currentTimeMillis()
-)
+) {
+    val allScreenshotPaths: List<String>
+        get() = screenshotPaths.ifEmpty {
+            screenshotPath?.let { listOf(it) } ?: emptyList()
+        }
+}
 
 @Serializable
 data class ProcessingEvent(

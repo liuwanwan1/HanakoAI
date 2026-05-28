@@ -37,10 +37,10 @@ internal class OpenAiResponsesAdapter(
                             put("type", "input_text")
                             put("text", request.userPrompt)
                         })
-                        request.imageBase64?.let {
+                        request.imagesBase64.forEach { imageBase64 ->
                             add(buildJsonObject {
                                 put("type", "input_image")
-                                put("image_url", "data:image/jpeg;base64,$it")
+                                put("image_url", "data:image/jpeg;base64,$imageBase64")
                             })
                         }
                     })

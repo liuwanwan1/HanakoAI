@@ -16,10 +16,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -258,12 +262,15 @@ fun HistoryDetailScreen(result: ProcessingResult?) {
         return
     }
 
-    val screenshot = remember(result.screenshotPath, result.screenshotBase64) {
-        result.screenshotPath?.loadHistoryBitmap()
-            ?: result.screenshotBase64?.decodeHistoryBitmap()
+    val screenshots = remember(result.allScreenshotPaths, result.screenshotBase64) {
+        val bitmaps = result.allScreenshotPaths.mapNotNull { it.loadHistoryBitmap() }.toMutableList()
+        if (bitmaps.isEmpty()) {
+            result.screenshotBase64?.decodeHistoryBitmap()?.let { bitmaps.add(it) }
+        }
+        bitmaps
     }
     val context = LocalContext.current
-    var previewImage by remember(screenshot) { mutableStateOf(false) }
+    var previewImageIndex by remember { mutableStateOf(-1) }
     var imageBounds by remember { mutableStateOf<android.graphics.Rect?>(null) }
 
     LazyColumn(
@@ -278,26 +285,59 @@ fun HistoryDetailScreen(result: ProcessingResult?) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        screenshot?.let { bitmap ->
+        if (screenshots.isNotEmpty()) {
             item {
-                Image(
-                    bitmap = bitmap.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { coords ->
-                            val pos = coords.positionInWindow()
-                            val size = coords.size
-                            imageBounds = android.graphics.Rect(
-                                pos.x.roundToInt(),
-                                pos.y.roundToInt(),
-                                (pos.x + size.width).roundToInt(),
-                                (pos.y + size.height).roundToInt()
-                            )
+                if (screenshots.size == 1) {
+                    Image(
+                        bitmap = screenshots[0].asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onGloballyPositioned { coords ->
+                                val pos = coords.positionInWindow()
+                                val size = coords.size
+                                imageBounds = android.graphics.Rect(
+                                    pos.x.roundToInt(),
+                                    pos.y.roundToInt(),
+                                    (pos.x + size.width).roundToInt(),
+                                    (pos.y + size.height).roundToInt()
+                                )
+                            }
+                            .clickable { previewImageIndex = 0 },
+                        contentScale = ContentScale.FillWidth
+                    )
+                } else {
+                    Column {
+                        Text(
+                            text = "截图（${screenshots.size} 张）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) {
+                            itemsIndexed(screenshots) { index, bitmap ->
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainer,
+                                    modifier = Modifier
+                                        .width(280.dp)
+                                        .heightIn(min = 200.dp, max = 400.dp)
+                                        .clickable { previewImageIndex = index }
+                                ) {
+                                    Image(
+                                        bitmap = bitmap.asImageBitmap(),
+                                        contentDescription = "截图 ${index + 1}",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Fit
+                                    )
+                                }
+                            }
                         }
-                        .clickable { previewImage = true },
-                    contentScale = ContentScale.FillWidth
-                )
+                    }
+                }
             }
         }
         if (result.route == ProcessingRoute.OCR_THEN_LLM) {
@@ -433,13 +473,15 @@ fun HistoryDetailScreen(result: ProcessingResult?) {
         item { Spacer(modifier = Modifier.height(80.dp)) }
     }
 
-    ImagePreviewOverlay(
-        visible = previewImage && screenshot != null,
-        bitmap = screenshot,
-        fileName = "hanako_history_${result.id}",
-        onDismiss = { previewImage = false },
-        sourceBounds = imageBounds
-    )
+    if (previewImageIndex >= 0 && previewImageIndex < screenshots.size) {
+        ImagePreviewOverlay(
+            visible = true,
+            bitmap = screenshots[previewImageIndex],
+            fileName = "hanako_history_${result.id}_$previewImageIndex",
+            onDismiss = { previewImageIndex = -1 },
+            sourceBounds = imageBounds
+        )
+    }
 }
 
 private fun historyPreviewText(result: ProcessingResult): String {

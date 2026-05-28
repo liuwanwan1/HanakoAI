@@ -73,11 +73,13 @@ internal class ProcessingPipeline(
 
     fun createBaseResult(
         models: ResolvedModels,
-        bitmap: Bitmap,
+        bitmaps: List<Bitmap>,
         detail: String
-    ): Triple<ProcessingResult, String, String> {
+    ): Triple<ProcessingResult, String, List<String>> {
         val historyId = java.util.UUID.randomUUID().toString()
-        val screenshotPath = bitmap.saveToHistoryFile(appContext, historyId)
+        val screenshotPaths = bitmaps.mapIndexed { index, bitmap ->
+            bitmap.saveToHistoryFile(appContext, "${historyId}_$index")
+        }
         val baseResult = ProcessingResult(
             id = historyId,
             assistantName = models.assistant.name,
@@ -88,10 +90,11 @@ internal class ProcessingPipeline(
                 ProcessingRoute.MULTIMODAL_DIRECT -> buildModelSummary(models.visionModel, models.visionProvider?.name)
             },
             detail = detail,
-            screenshotPath = screenshotPath,
+            screenshotPath = screenshotPaths.firstOrNull(),
+            screenshotPaths = screenshotPaths,
             events = listOf(ProcessingEvent(title = "请求开始", detail = "已创建处理记录"))
         )
-        return Triple(baseResult, historyId, screenshotPath)
+        return Triple(baseResult, historyId, screenshotPaths)
     }
 
     fun validateOcrThenLlmModels(models: ResolvedModels) {
@@ -119,7 +122,7 @@ internal class ProcessingPipeline(
         model: String,
         systemPrompt: String,
         userPrompt: String,
-        imageBase64: String? = null,
+        imagesBase64: List<String> = emptyList(),
         firstDeltaTimeoutMillis: Long,
         onDelta: (String) -> Unit
     ): String {
@@ -129,7 +132,7 @@ internal class ProcessingPipeline(
             model = model,
             systemPrompt = systemPrompt,
             userPrompt = userPrompt,
-            imageBase64 = imageBase64,
+            imagesBase64 = imagesBase64,
             firstDeltaTimeoutMillis = firstDeltaTimeoutMillis
         ).collect { event ->
             when (event) {
@@ -154,7 +157,7 @@ internal class ProcessingPipeline(
         model: String,
         systemPrompt: String,
         userPrompt: String,
-        imageBase64: String? = null,
+        imagesBase64: List<String> = emptyList(),
         firstDeltaTimeoutMillis: Long,
         onThoughtDelta: (String) -> Unit
     ): StreamResult {
@@ -165,7 +168,7 @@ internal class ProcessingPipeline(
             model = model,
             systemPrompt = systemPrompt,
             userPrompt = userPrompt,
-            imageBase64 = imageBase64,
+            imagesBase64 = imagesBase64,
             tools = ToolRegistry.AUTOMATION_TOOLS,
             firstDeltaTimeoutMillis = firstDeltaTimeoutMillis
         ).collect { event ->
@@ -193,48 +196,56 @@ internal class ProcessingPipeline(
 
     suspend fun streamOcrThenChat(
         models: ResolvedModels,
-        bitmap: Bitmap,
+        bitmaps: List<Bitmap>,
         onOcrDelta: (String) -> Unit,
         onAnswerDelta: (String) -> Unit
     ): Pair<String, String> {
-        AppDebugLogStore.i(tag, "streamOcrThenChat ocrModel=${models.ocrModel} textModel=${models.textModel}")
-        val ocrText = if (models.usingLocalOcr) {
-            runLocalOcr(bitmap).also { onOcrDelta(it) }
-        } else {
-            collectTextStream(
-                provider = requireNotNull(models.ocrProvider),
-                model = models.ocrModel,
-                systemPrompt = models.assistant.ocrPrompt,
-                userPrompt = "请执行 OCR。",
-                imageBase64 = bitmap.toBase64Jpeg(),
-                firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
-                onDelta = onOcrDelta
-            )
+        AppDebugLogStore.i(tag, "streamOcrThenChat ocrModel=${models.ocrModel} textModel=${models.textModel} imageCount=${bitmaps.size}")
+        val ocrTexts = mutableListOf<String>()
+        bitmaps.forEachIndexed { index, bitmap ->
+            val ocrText = if (models.usingLocalOcr) {
+                runLocalOcr(bitmap)
+            } else {
+                collectTextStream(
+                    provider = requireNotNull(models.ocrProvider),
+                    model = models.ocrModel,
+                    systemPrompt = models.assistant.ocrPrompt,
+                    userPrompt = "请执行 OCR。",
+                    imagesBase64 = listOf(bitmap.toBase64Jpeg()),
+                    firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
+                    onDelta = { if (index == bitmaps.lastIndex) onOcrDelta(it) }
+                )
+            }
+            ocrTexts.add(ocrText)
         }
+        val combinedOcrText = ocrTexts.joinToString("\n\n---\n\n")
+        onOcrDelta(combinedOcrText)
+        
         val answer = collectTextStream(
             provider = requireNotNull(models.textProvider),
             model = models.textModel,
             systemPrompt = assistantPromptWithCopyMarker(models.assistant.textPrompt),
-            userPrompt = "以下是 OCR 结果，请完成任务：\n$ocrText",
+            userPrompt = "以下是 OCR 结果，请完成任务：\n$combinedOcrText",
             firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
             onDelta = onAnswerDelta
         )
-        AppDebugLogStore.i(tag, "streamOcrThenChat success ocrLength=${ocrText.length} answerLength=${answer.length}")
-        return ocrText to answer
+        AppDebugLogStore.i(tag, "streamOcrThenChat success ocrLength=${combinedOcrText.length} answerLength=${answer.length}")
+        return combinedOcrText to answer
     }
 
     suspend fun streamVisionDirect(
         models: ResolvedModels,
-        bitmap: Bitmap,
+        bitmaps: List<Bitmap>,
         onAnswerDelta: (String) -> Unit
     ): String {
-        AppDebugLogStore.i(tag, "streamVisionDirect visionModel=${models.visionModel}")
+        AppDebugLogStore.i(tag, "streamVisionDirect visionModel=${models.visionModel} imageCount=${bitmaps.size}")
+        val imagesBase64 = bitmaps.map { it.toBase64Jpeg() }
         val answer = collectTextStream(
             provider = requireNotNull(models.visionProvider),
             model = models.visionModel,
             systemPrompt = assistantPromptWithCopyMarker(models.assistant.visionPrompt),
             userPrompt = "请直接基于图片内容完成任务。",
-            imageBase64 = bitmap.toBase64Jpeg(),
+            imagesBase64 = imagesBase64,
             firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
             onDelta = onAnswerDelta
         )
@@ -244,49 +255,56 @@ internal class ProcessingPipeline(
 
     suspend fun streamOcrThenAutomation(
         models: ResolvedModels,
-        bitmap: Bitmap,
+        bitmaps: List<Bitmap>,
         onOcrDelta: (String) -> Unit,
         onThoughtDelta: (String) -> Unit
     ): Pair<String, AutomationResult> {
-        AppDebugLogStore.i(tag, "streamOcrThenAutomation ocrModel=${models.ocrModel} textModel=${models.textModel}")
-        val ocrText = if (models.usingLocalOcr) {
-            runLocalOcr(bitmap).also { onOcrDelta(it) }
-        } else {
-            collectTextStream(
-                provider = requireNotNull(models.ocrProvider),
-                model = models.ocrModel,
-                systemPrompt = models.assistant.ocrPrompt,
-                userPrompt = "请执行 OCR。",
-                imageBase64 = bitmap.toBase64Jpeg(),
-                firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
-                onDelta = onOcrDelta
-            )
+        AppDebugLogStore.i(tag, "streamOcrThenAutomation ocrModel=${models.ocrModel} textModel=${models.textModel} imageCount=${bitmaps.size}")
+        val ocrTexts = mutableListOf<String>()
+        bitmaps.forEachIndexed { index, bitmap ->
+            val ocrText = if (models.usingLocalOcr) {
+                runLocalOcr(bitmap)
+            } else {
+                collectTextStream(
+                    provider = requireNotNull(models.ocrProvider),
+                    model = models.ocrModel,
+                    systemPrompt = models.assistant.ocrPrompt,
+                    userPrompt = "请执行 OCR。",
+                    imagesBase64 = listOf(bitmap.toBase64Jpeg()),
+                    firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
+                    onDelta = { if (index == bitmaps.lastIndex) onOcrDelta(it) }
+                )
+            }
+            ocrTexts.add(ocrText)
         }
+        val combinedOcrText = ocrTexts.joinToString("\n\n---\n\n")
+        onOcrDelta(combinedOcrText)
         val streamResult = collectToolStream(
             provider = requireNotNull(models.textProvider),
             model = models.textModel,
             systemPrompt = automationSystemPrompt(models.assistant.textPrompt),
-            userPrompt = "以下是 OCR 结果，请先输出思考过程，再通过一次工具调用给出自动模式动作：\n$ocrText",
+            userPrompt = "以下是 OCR 结果，请先输出思考过程，再通过一次工具调用给出自动模式动作：\n$combinedOcrText",
             firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
             onThoughtDelta = onThoughtDelta
         )
         val result = buildAutomationResult(streamResult)
-        AppDebugLogStore.i(tag, "streamOcrThenAutomation success ocrLength=${ocrText.length} thoughtLength=${result.thought.length} action=${result.action.type}")
-        return ocrText to result
+        AppDebugLogStore.i(tag, "streamOcrThenAutomation success ocrLength=${combinedOcrText.length} thoughtLength=${result.thought.length} action=${result.action.type}")
+        return combinedOcrText to result
     }
 
     suspend fun streamAutomationDirect(
         models: ResolvedModels,
-        bitmap: Bitmap,
+        bitmaps: List<Bitmap>,
         onThoughtDelta: (String) -> Unit
     ): AutomationResult {
-        AppDebugLogStore.i(tag, "streamAutomationDirect visionModel=${models.visionModel}")
+        AppDebugLogStore.i(tag, "streamAutomationDirect visionModel=${models.visionModel} imageCount=${bitmaps.size}")
+        val imagesBase64 = bitmaps.map { it.toBase64Jpeg() }
         val streamResult = collectToolStream(
             provider = requireNotNull(models.visionProvider),
             model = models.visionModel,
             systemPrompt = automationSystemPrompt(models.assistant.visionPrompt),
             userPrompt = "请根据整张屏幕截图先输出思考过程，再通过一次工具调用给出自动模式动作。",
-            imageBase64 = bitmap.toBase64Jpeg(),
+            imagesBase64 = imagesBase64,
             firstDeltaTimeoutMillis = models.firstDeltaTimeoutMillis,
             onThoughtDelta = onThoughtDelta
         )
@@ -301,7 +319,7 @@ internal class ProcessingPipeline(
         ocrText: String,
         answer: String,
         historyId: String,
-        screenshotPath: String
+        screenshotPaths: List<String>
     ): ProcessingResult {
         val events = base.events.toMutableList()
         if (models.route == ProcessingRoute.OCR_THEN_LLM) {
@@ -320,7 +338,8 @@ internal class ProcessingPipeline(
             detail = "处理完成",
             extractedText = ocrText,
             answer = answer,
-            screenshotPath = screenshotPath,
+            screenshotPath = screenshotPaths.firstOrNull(),
+            screenshotPaths = screenshotPaths,
             events = events,
             createdAtMillis = base.createdAtMillis
         )
@@ -332,7 +351,7 @@ internal class ProcessingPipeline(
         ocrText: String,
         automationResult: AutomationResult,
         historyId: String,
-        screenshotPath: String
+        screenshotPaths: List<String>
     ): Pair<AutomationActionRecord, ProcessingResult> {
         val events = base.events.toMutableList()
         if (models.route == ProcessingRoute.OCR_THEN_LLM) {
@@ -358,7 +377,8 @@ internal class ProcessingPipeline(
             answer = "",
             automationThought = automationResult.thought,
             automationAction = automationResult.action,
-            screenshotPath = screenshotPath,
+            screenshotPath = screenshotPaths.firstOrNull(),
+            screenshotPaths = screenshotPaths,
             events = events,
             createdAtMillis = base.createdAtMillis
         )

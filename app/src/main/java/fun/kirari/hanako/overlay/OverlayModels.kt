@@ -2,7 +2,7 @@ package `fun`.kirari.hanako.overlay
 
 import android.graphics.Bitmap
 import androidx.compose.ui.unit.dp
-import `fun`.kirari.hanako.automation.BubbleDisplayState
+import `fun`.kirari.hanako.automation.BubbleState
 import `fun`.kirari.hanako.data.AppSettings
 import `fun`.kirari.hanako.data.ProcessingResult
 
@@ -40,8 +40,7 @@ internal data class OverlayUiState(
     val launchMode: OverlayLaunchMode = OverlayLaunchMode.NORMAL,
     val autoRunState: AutoRunState = AutoRunState.IDLE,
     val autoCopiedLabel: String? = null,
-    val bubbleDisplayState: BubbleDisplayState = BubbleDisplayState.IDLE,
-    val bubbleLetters: String? = null
+    val bubbleState: BubbleState = BubbleState.Idle
 )
 
 

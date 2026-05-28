@@ -24,7 +24,8 @@ import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import `fun`.kirari.hanako.automation.BubbleDisplayState
+import `fun`.kirari.hanako.automation.BubbleRenderer
+import `fun`.kirari.hanako.automation.BubbleState
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -78,7 +79,6 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
     private var bubbleTextView: TextView? = null
     private var bubbleSpinnerView: ProgressBar? = null
     private var bubbleColorAnimator: ValueAnimator? = null
-    private var bubbleRotateAnimator: ObjectAnimator? = null
     private var bubbleCompletionResetJob: Job? = null
     private var lastHandledCompletionId: String? = null
     private var panelView: FrameLayout? = null
@@ -152,8 +152,6 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         bubbleIconView = null
         bubbleTextView = null
         bubbleSpinnerView = null
-        bubbleRotateAnimator?.cancel()
-        bubbleRotateAnimator = null
         OverlayRuntimeState.setRunning(false)
         serviceViewModelStore.clear()
         serviceScope.cancel()
@@ -168,14 +166,9 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
             overlayViewModel.uiState.collect { state ->
                 AppDebugLogStore.d(
                     logTag,
-                    "uiState launchMode=${state.launchMode} autoRunState=${state.autoRunState} bubble=${state.bubbleDisplayState} letters=${state.bubbleLetters} sheetVisible=${state.sheetVisible} working=${state.working} resultId=${state.result?.id} error=${state.error}"
+                    "uiState launchMode=${state.launchMode} autoRunState=${state.autoRunState} bubble=${state.bubbleState::class.simpleName} sheetVisible=${state.sheetVisible} working=${state.working} resultId=${state.result?.id} error=${state.error}"
                 )
-                updateBubbleAppearance(
-                    launchMode = state.launchMode,
-                    autoRunState = state.autoRunState,
-                    bubbleDisplayState = state.bubbleDisplayState,
-                    bubbleLetters = state.bubbleLetters
-                )
+                updateBubbleAppearance(state.bubbleState, state.launchMode)
                 if (state.sheetVisible) {
                     showOrUpdatePanel(state.sheetMode)
                 } else {
@@ -186,7 +179,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                     if (completionId != null && completionId != lastHandledCompletionId) {
                         AppDebugLogStore.i(
                             logTag,
-                            "auto completion handled completionId=$completionId copiedLabel=${state.autoCopiedLabel} bubble=${state.bubbleDisplayState}"
+                            "auto completion handled completionId=$completionId copiedLabel=${state.autoCopiedLabel} bubble=${state.bubbleState::class.simpleName}"
                         )
                         lastHandledCompletionId = completionId
                         state.autoCopiedLabel?.let { copyToClipboard(this@OverlayService, "Hanako Auto Copy", it) }
@@ -230,8 +223,8 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
         val spinnerView = ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
             layoutParams = FrameLayout.LayoutParams(spinnerSizePx, spinnerSizePx, Gravity.CENTER)
-            scaleX = 1.15f
-            scaleY = 1.15f
+            scaleX = 1.00f
+            scaleY = 1.00f
             isIndeterminate = true
             visibility = View.GONE
             alpha = 0f
@@ -263,6 +256,10 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
             var dragging = false
             var longPressTriggered = false
             val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
+            val doubleTapTimeout = ViewConfiguration.getDoubleTapTimeout().toLong()
+            var lastTapTime = 0L
+            var doubleTapDetected = false
+            
             val longPressRunnable = Runnable {
                 if (!dragging) {
                     longPressTriggered = true
@@ -271,9 +268,18 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                         HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
                     )
                     vibrateShort()
-                    openMainActivity()
+                    overlayViewModel.handleLongPress()
                 }
             }
+            
+            val doubleTapTimeoutRunnable = Runnable {
+                if (!doubleTapDetected && !longPressTriggered) {
+                    // 单击超时，执行单击操作
+                    overlayViewModel.handleSingleTap()
+                }
+                doubleTapDetected = false
+            }
+            
             setOnTouchListener { _: View, event: MotionEvent ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
@@ -283,7 +289,9 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                         startY = params.y
                         dragging = false
                         longPressTriggered = false
+                        doubleTapDetected = false
                         removeCallbacks(longPressRunnable)
+                        removeCallbacks(doubleTapTimeoutRunnable)
                         postDelayed(longPressRunnable, longPressTimeout)
                         true
                     }
@@ -294,6 +302,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                         if (!dragging && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
                             dragging = true
                             removeCallbacks(longPressRunnable)
+                            removeCallbacks(doubleTapTimeoutRunnable)
                         }
                         if (dragging) {
                             params.x = startX + dx
@@ -306,15 +315,26 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                     MotionEvent.ACTION_UP -> {
                         removeCallbacks(longPressRunnable)
                         if (!dragging && !longPressTriggered) {
-                            AppDebugLogStore.i(logTag, "bubble tapped bubbleState=${overlayViewModel.uiState.value.bubbleDisplayState} launchMode=${overlayViewModel.uiState.value.launchMode}")
-                            overlayViewModel.onBubbleTappedAfterLettersShown()
-                            overlayViewModel.openCropSheet()
+                            val currentTime = android.os.SystemClock.uptimeMillis()
+                            val timeSinceLastTap = currentTime - lastTapTime
+                            
+                            if (timeSinceLastTap < doubleTapTimeout) {
+                                // 双击检测
+                                doubleTapDetected = true
+                                removeCallbacks(doubleTapTimeoutRunnable)
+                                overlayViewModel.handleDoubleTap()
+                            } else {
+                                // 可能是单击或双击的第一次，等待超时
+                                lastTapTime = currentTime
+                                postDelayed(doubleTapTimeoutRunnable, doubleTapTimeout)
+                            }
                         }
                         true
                     }
 
                     MotionEvent.ACTION_CANCEL -> {
                         removeCallbacks(longPressRunnable)
+                        removeCallbacks(doubleTapTimeoutRunnable)
                         true
                     }
 
@@ -328,7 +348,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         bubbleSpinnerView = spinnerView
         windowManager.addView(view, params)
         bubbleView = view
-        updateBubbleAppearance(OverlayLaunchMode.NORMAL, AutoRunState.IDLE)
+        updateBubbleAppearance(BubbleState.Idle, OverlayLaunchMode.NORMAL)
     }
 
     private fun showOrUpdatePanel(mode: OverlaySheetMode) {
@@ -567,76 +587,17 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         }
     }
 
-    private fun updateBubbleAppearance(
-        launchMode: OverlayLaunchMode,
-        autoRunState: AutoRunState,
-        bubbleDisplayState: BubbleDisplayState = BubbleDisplayState.IDLE,
-        bubbleLetters: String? = null
-    ) {
+    private fun updateBubbleAppearance(bubbleState: BubbleState, launchMode: OverlayLaunchMode) {
         AppDebugLogStore.d(
             logTag,
-            "updateBubbleAppearance launchMode=$launchMode autoRunState=$autoRunState bubbleDisplayState=$bubbleDisplayState letters=$bubbleLetters"
+            "updateBubbleAppearance state=${bubbleState::class.simpleName} launchMode=$launchMode"
         )
         val bubble = bubbleSurfaceView ?: return
         val icon = bubbleIconView ?: return
         val textView = bubbleTextView
         val spinner = bubbleSpinnerView
-        val appearance = when {
-            launchMode == OverlayLaunchMode.NORMAL -> BubbleAppearance(
-                backgroundColor = Color.parseColor("#D0BCFF"),
-                iconTint = Color.parseColor("#381E72"),
-                iconRes = R.drawable.ic_bubble_crop,
-                spinnerColor = Color.parseColor("#6750A4"),
-                showSpinner = false,
-                letters = null,
-                rotate = false
-            )
-            bubbleDisplayState == BubbleDisplayState.RUNNING || autoRunState == AutoRunState.RUNNING -> BubbleAppearance(
-                backgroundColor = Color.parseColor("#EADDFF"),
-                iconTint = Color.parseColor("#4F378B"),
-                iconRes = R.drawable.ic_bubble_auto,
-                spinnerColor = Color.parseColor("#6750A4"),
-                showSpinner = true,
-                letters = null,
-                rotate = false
-            )
-            bubbleDisplayState == BubbleDisplayState.COPIED || (autoRunState == AutoRunState.COMPLETED && bubbleLetters == null) -> BubbleAppearance(
-                backgroundColor = Color.parseColor("#D3E3FD"),
-                iconTint = Color.parseColor("#0B57D0"),
-                iconRes = R.drawable.ic_bubble_clipboard,
-                spinnerColor = Color.parseColor("#0B57D0"),
-                showSpinner = false,
-                letters = null,
-                rotate = false
-            )
-            bubbleDisplayState == BubbleDisplayState.SHOWING_LETTERS -> BubbleAppearance(
-                backgroundColor = Color.parseColor("#E8F0FE"),
-                iconTint = Color.parseColor("#0B57D0"),
-                iconRes = 0,
-                spinnerColor = Color.parseColor("#0B57D0"),
-                showSpinner = false,
-                letters = bubbleLetters,
-                rotate = false
-            )
-            bubbleDisplayState == BubbleDisplayState.SHOWING_LETTERS_PENDING_RESET -> BubbleAppearance(
-                backgroundColor = Color.parseColor("#F1F3F4"),
-                iconTint = Color.parseColor("#5F6368"),
-                iconRes = R.drawable.ic_bubble_auto,
-                spinnerColor = Color.parseColor("#5F6368"),
-                showSpinner = false,
-                letters = null,
-                rotate = true
-            )
-            else -> BubbleAppearance(
-                backgroundColor = Color.parseColor("#F3EDF7"),
-                iconTint = Color.parseColor("#4A4458"),
-                iconRes = R.drawable.ic_bubble_auto,
-                spinnerColor = Color.parseColor("#6750A4"),
-                showSpinner = false,
-                letters = null,
-                rotate = false
-            )
-        }
+        val appearance = BubbleRenderer.render(bubbleState, launchMode, this)
+        
         val existing = bubble.background as? GradientDrawable
         val drawable = existing ?: GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -690,7 +651,12 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         }
 
         spinner?.apply {
-            indeterminateDrawable?.setColorFilter(appearance.spinnerColor, PorterDuff.Mode.SRC_IN)
+            // 设置 spinner 颜色
+            val drawable = indeterminateDrawable?.mutate()
+            if (drawable != null) {
+                drawable.setColorFilter(appearance.spinnerColor, PorterDuff.Mode.SRC_IN)
+                indeterminateDrawable = drawable
+            }
             animate().cancel()
             if (appearance.showSpinner) {
                 visibility = View.VISIBLE
@@ -703,36 +669,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                     .start()
             }
         }
-
-        if (appearance.rotate) {
-            if (bubbleRotateAnimator?.isRunning != true) {
-                AppDebugLogStore.i(logTag, "starting bubble rotate animation")
-                bubbleRotateAnimator?.cancel()
-                bubbleRotateAnimator = ObjectAnimator.ofFloat(bubble, View.ROTATION, bubble.rotation, bubble.rotation + 360f).apply {
-                    duration = 900L
-                    repeatCount = ObjectAnimator.INFINITE
-                    start()
-                }
-            }
-        } else {
-            if (bubbleRotateAnimator != null) {
-                AppDebugLogStore.i(logTag, "stopping bubble rotate animation")
-            }
-            bubbleRotateAnimator?.cancel()
-            bubbleRotateAnimator = null
-            bubble.rotation = 0f
-        }
     }
-
-    private data class BubbleAppearance(
-        val backgroundColor: Int,
-        val iconTint: Int,
-        val iconRes: Int,
-        val spinnerColor: Int,
-        val showSpinner: Boolean,
-        val letters: String?,
-        val rotate: Boolean
-    )
 
     private fun dismissPanel() {
         panelAnimationJob?.cancel()

@@ -39,13 +39,13 @@ internal class AnthropicAdapter(
                             put("type", "text")
                             put("text", request.userPrompt)
                         })
-                        request.imageBase64?.let {
+                        request.imagesBase64.forEach { imageBase64 ->
                             add(buildJsonObject {
                                 put("type", "image")
                                 put("source", buildJsonObject {
                                     put("type", "base64")
                                     put("media_type", "image/jpeg")
-                                    put("data", it)
+                                    put("data", imageBase64)
                                 })
                             })
                         }

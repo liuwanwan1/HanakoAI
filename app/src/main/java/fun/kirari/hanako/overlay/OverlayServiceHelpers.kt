@@ -55,8 +55,12 @@ internal fun OverlayService.notifyAutomationCompleted(label: String?) {
 }
 
 internal fun OverlayService.openMainActivity() {
-    startActivity(
-        Intent(this, MainActivity::class.java).apply {
+    openMainActivity(this)
+}
+
+internal fun openMainActivity(context: android.content.Context) {
+    context.startActivity(
+        Intent(context, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
     )

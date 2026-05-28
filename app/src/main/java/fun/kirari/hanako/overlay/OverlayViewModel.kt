@@ -6,6 +6,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import `fun`.kirari.hanako.AppContainer
+import `fun`.kirari.hanako.automation.BubbleEvent
+import `fun`.kirari.hanako.automation.BubbleState
+import `fun`.kirari.hanako.automation.BubbleStateMachine
 import `fun`.kirari.hanako.data.AutomationActionType
 import `fun`.kirari.hanako.data.ModelPurpose
 import `fun`.kirari.hanako.data.ProcessingEvent
@@ -33,6 +36,10 @@ internal class OverlayViewModel(
 ) : ViewModel() {
     private val tag = "HanakoOverlayVM"
     private val processingTimeoutMillis = 90_000L
+    
+    // 新的状态机
+    val bubbleStateMachine = BubbleStateMachine()
+    
     private val _uiState = MutableStateFlow(OverlayUiState())
     val uiState: StateFlow<OverlayUiState> = _uiState.asStateFlow()
 
@@ -40,6 +47,13 @@ internal class OverlayViewModel(
         viewModelScope.launch {
             repository.settings.collect { settings ->
                 _uiState.update { it.copy(settings = settings) }
+            }
+        }
+        
+        // 监听状态机变化，同步到 UI 状态
+        viewModelScope.launch {
+            bubbleStateMachine.state.collect { bubbleState ->
+                _uiState.update { it.copy(bubbleState = bubbleState) }
             }
         }
     }
@@ -51,10 +65,12 @@ internal class OverlayViewModel(
                 launchMode = mode,
                 autoRunState = if (mode == OverlayLaunchMode.NORMAL) AutoRunState.IDLE else state.autoRunState,
                 autoCopiedLabel = if (mode == OverlayLaunchMode.NORMAL) null else state.autoCopiedLabel,
-                bubbleDisplayState = if (mode == OverlayLaunchMode.NORMAL) `fun`.kirari.hanako.automation.BubbleDisplayState.IDLE else state.bubbleDisplayState,
-                bubbleLetters = if (mode == OverlayLaunchMode.NORMAL) null else state.bubbleLetters,
                 error = null
             )
+        }
+        // 普通模式重置状态机
+        if (mode == OverlayLaunchMode.NORMAL) {
+            bubbleStateMachine.forceState(BubbleState.Idle)
         }
     }
 
@@ -82,11 +98,10 @@ internal class OverlayViewModel(
                         sheetVisible = true,
                         sheetMode = OverlaySheetMode.CROP,
                         autoRunState = AutoRunState.IDLE,
-                        autoCopiedLabel = null,
-                        bubbleDisplayState = `fun`.kirari.hanako.automation.BubbleDisplayState.IDLE,
-                        bubbleLetters = null
+                        autoCopiedLabel = null
                     )
                 }
+                bubbleStateMachine.forceState(BubbleState.Idle)
             }.onFailure { error ->
                 AppDebugLogStore.e(tag, "openCropSheet failed", error)
                 _uiState.update {
@@ -112,11 +127,11 @@ internal class OverlayViewModel(
                     working = true,
                     sheetVisible = false,
                     autoRunState = AutoRunState.RUNNING,
-                    autoCopiedLabel = null,
-                    bubbleDisplayState = `fun`.kirari.hanako.automation.BubbleDisplayState.RUNNING,
-                    bubbleLetters = null
+                    autoCopiedLabel = null
                 )
             }
+            bubbleStateMachine.dispatch(BubbleEvent.StartProcessing)
+            
             runCatching {
                 withContext(Dispatchers.IO) {
                     `fun`.kirari.hanako.capture.ScreenCaptureManager.captureLatestBitmap(appContext, _uiState.value.settings.screenCaptureMethod)
@@ -133,24 +148,30 @@ internal class OverlayViewModel(
                         error = error.message ?: "截屏失败"
                     )
                 }
+                bubbleStateMachine.forceState(BubbleState.Idle)
             }
         }
     }
 
     fun process(bitmap: Bitmap) {
+        process(listOf(bitmap))
+    }
+
+    fun process(bitmaps: List<Bitmap>) {
         val state = _uiState.value
-        AppDebugLogStore.i(tag, "process start route=${state.settings.processingRoute} bitmap=${bitmap.width}x${bitmap.height}")
+        val firstBitmap = bitmaps.firstOrNull() ?: return
+        AppDebugLogStore.i(tag, "process start route=${state.settings.processingRoute} bitmapCount=${bitmaps.size}")
 
         val models = runCatching { pipeline.resolveModels(state) }.getOrElse { error ->
             _uiState.update { it.copy(error = error.message) }
             return
         }
-        val (baseResult, historyId, screenshotPath) = pipeline.createBaseResult(models, bitmap, "请求已开始")
+        val (baseResult, historyId, screenshotPaths) = pipeline.createBaseResult(models, bitmaps, "请求已开始")
 
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
-                    selectedBitmap = bitmap,
+                    selectedBitmap = firstBitmap,
                     liveOcrText = "",
                     liveAnswerText = "",
                     result = null,
@@ -168,7 +189,7 @@ internal class OverlayViewModel(
                             pipeline.validateOcrThenLlmModels(models)
                             val (ocrText, answer) = pipeline.streamOcrThenChat(
                                 models = models,
-                                bitmap = bitmap,
+                                bitmaps = bitmaps,
                                 onOcrDelta = { delta ->
                                     _uiState.update { current -> current.copy(liveOcrText = current.liveOcrText + delta) }
                                 },
@@ -176,19 +197,19 @@ internal class OverlayViewModel(
                                     _uiState.update { current -> current.copy(liveAnswerText = current.liveAnswerText + delta) }
                                 }
                             )
-                            pipeline.buildChatResult(baseResult, models, ocrText, answer, historyId, screenshotPath)
+                            pipeline.buildChatResult(baseResult, models, ocrText, answer, historyId, screenshotPaths)
                         }
 
                         ProcessingRoute.MULTIMODAL_DIRECT -> {
                             pipeline.validateVisionModels(models)
                             val answer = pipeline.streamVisionDirect(
                                 models = models,
-                                bitmap = bitmap,
+                                bitmaps = bitmaps,
                                 onAnswerDelta = { delta ->
                                     _uiState.update { current -> current.copy(liveAnswerText = current.liveAnswerText + delta) }
                                 }
                             )
-                            pipeline.buildChatResult(baseResult, models, "", answer, historyId, screenshotPath)
+                            pipeline.buildChatResult(baseResult, models, "", answer, historyId, screenshotPaths)
                         }
                     }
                 }
@@ -202,11 +223,10 @@ internal class OverlayViewModel(
                         liveOcrText = result.extractedText,
                         liveAnswerText = result.answer,
                         autoRunState = AutoRunState.IDLE,
-                        autoCopiedLabel = null,
-                        bubbleDisplayState = `fun`.kirari.hanako.automation.BubbleDisplayState.IDLE,
-                        bubbleLetters = null
+                        autoCopiedLabel = null
                     )
                 }
+                bubbleStateMachine.forceState(BubbleState.Idle)
             }.onFailure { error ->
                 AppDebugLogStore.e(tag, "process failed", error)
                 handleError(error, baseResult)
@@ -219,32 +239,197 @@ internal class OverlayViewModel(
     }
 
     fun consumeAutoCompletedState() {
-        AppDebugLogStore.d(tag, "consumeAutoCompletedState state=${_uiState.value.autoRunState} bubble=${_uiState.value.bubbleDisplayState}")
-        _uiState.update { state ->
-            if (state.launchMode == OverlayLaunchMode.AUTO && state.autoRunState == AutoRunState.COMPLETED) {
-                if (state.bubbleDisplayState == `fun`.kirari.hanako.automation.BubbleDisplayState.COPIED) {
-                    state.copy(autoRunState = AutoRunState.IDLE, bubbleDisplayState = `fun`.kirari.hanako.automation.BubbleDisplayState.IDLE)
-                } else {
-                    state.copy(autoRunState = AutoRunState.IDLE)
-                }
+        val currentState = bubbleStateMachine.currentState
+        AppDebugLogStore.d(tag, "consumeAutoCompletedState state=${_uiState.value.autoRunState} bubble=${currentState::class.simpleName}")
+        
+        if (_uiState.value.launchMode == OverlayLaunchMode.AUTO && _uiState.value.autoRunState == AutoRunState.COMPLETED) {
+            if (currentState is BubbleState.Copied) {
+                _uiState.update { it.copy(autoRunState = AutoRunState.IDLE) }
+                bubbleStateMachine.forceState(BubbleState.Idle)
             } else {
-                state
+                _uiState.update { it.copy(autoRunState = AutoRunState.IDLE) }
             }
         }
     }
 
     fun onBubbleTappedAfterLettersShown() {
-        AppDebugLogStore.i(tag, "onBubbleTappedAfterLettersShown launchMode=${_uiState.value.launchMode} bubble=${_uiState.value.bubbleDisplayState}")
-        _uiState.update { state ->
-            if (state.launchMode == OverlayLaunchMode.AUTO && state.bubbleDisplayState == `fun`.kirari.hanako.automation.BubbleDisplayState.SHOWING_LETTERS) {
-                AppDebugLogStore.i(tag, "onBubbleTappedAfterLettersShown clearing letters and entering pending reset")
-                state.copy(
-                    bubbleDisplayState = `fun`.kirari.hanako.automation.BubbleDisplayState.SHOWING_LETTERS_PENDING_RESET,
-                    bubbleLetters = null
-                )
-            } else {
-                state
+        val currentState = bubbleStateMachine.currentState
+        AppDebugLogStore.i(tag, "onBubbleTappedAfterLettersShown launchMode=${_uiState.value.launchMode} bubble=${currentState::class.simpleName}")
+        
+        if (_uiState.value.launchMode == OverlayLaunchMode.AUTO && currentState is BubbleState.ShowingLetters) {
+            AppDebugLogStore.i(tag, "onBubbleTappedAfterLettersShown clearing letters and entering pending reset")
+            bubbleStateMachine.dispatch(BubbleEvent.SingleTap)
+        }
+    }
+
+    // 多页截图相关方法
+    
+    /**
+     * 进入多页截图模式
+     */
+    fun enterMultiPageCaptureMode() {
+        AppDebugLogStore.i(tag, "enterMultiPageCaptureMode")
+        bubbleStateMachine.dispatch(BubbleEvent.LongPress)
+    }
+
+    /**
+     * 截图一次
+     */
+    fun capturePage() {
+        val currentState = bubbleStateMachine.currentState
+        AppDebugLogStore.i(tag, "capturePage called state=${currentState::class.simpleName}")
+        if (currentState !is BubbleState.MultiPageCapture) {
+            AppDebugLogStore.i(tag, "capturePage called but not in MultiPageCapture state")
+            return
+        }
+        
+        AppDebugLogStore.i(tag, "capturePage count=${currentState.captureCount}")
+        // 先切换到正在截图状态
+        bubbleStateMachine.dispatch(BubbleEvent.CaptureStart)
+        AppDebugLogStore.i(tag, "capturePage dispatched CaptureStart, new state=${bubbleStateMachine.currentState::class.simpleName}")
+        
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    `fun`.kirari.hanako.capture.ScreenCaptureManager.captureLatestBitmap(appContext, _uiState.value.settings.screenCaptureMethod)
+                }
+            }.onSuccess { bitmap ->
+                AppDebugLogStore.i(tag, "capturePage success width=${bitmap.width} height=${bitmap.height}")
+                bubbleStateMachine.dispatch(BubbleEvent.CaptureTaken(bitmap))
+                AppDebugLogStore.i(tag, "capturePage dispatched CaptureTaken, new state=${bubbleStateMachine.currentState::class.simpleName}")
+                // 2 秒后恢复到等待点击状态
+                launch {
+                    kotlinx.coroutines.delay(2000)
+                    bubbleStateMachine.dispatch(BubbleEvent.CaptureSuccessAnimationDone)
+                    AppDebugLogStore.i(tag, "capturePage dispatched CaptureSuccessAnimationDone, new state=${bubbleStateMachine.currentState::class.simpleName}")
+                }
+            }.onFailure { error ->
+                AppDebugLogStore.e(tag, "capturePage failed", error)
+                _uiState.update { it.copy(error = error.message ?: "截图失败") }
+                // 截图失败，恢复到等待点击状态
+                bubbleStateMachine.dispatch(BubbleEvent.CaptureSuccessAnimationDone)
+                AppDebugLogStore.i(tag, "capturePage failed, dispatched CaptureSuccessAnimationDone")
             }
+        }
+    }
+
+    /**
+     * 发送截图给 AI
+     */
+    fun sendCaptures() {
+        AppDebugLogStore.i(tag, "sendCaptures called state=${bubbleStateMachine.currentState::class.simpleName}")
+        if (!bubbleStateMachine.canSendCaptures()) {
+            AppDebugLogStore.i(tag, "sendCaptures called but cannot send")
+            return
+        }
+        
+        val bitmaps = bubbleStateMachine.getCapturedBitmaps()
+        AppDebugLogStore.i(tag, "sendCaptures count=${bitmaps.size}")
+        
+        if (bitmaps.isEmpty()) {
+            AppDebugLogStore.i(tag, "sendCaptures no bitmaps available")
+            return
+        }
+        
+        bubbleStateMachine.dispatch(BubbleEvent.SendCaptures)
+        AppDebugLogStore.i(tag, "sendCaptures dispatched SendCaptures, new state=${bubbleStateMachine.currentState::class.simpleName}")
+        viewModelScope.launch {
+            processAutoBitmaps(bitmaps)
+        }
+    }
+
+    /**
+     * 退出多页截图模式
+     */
+    fun exitMultiPageCaptureMode() {
+        AppDebugLogStore.i(tag, "exitMultiPageCaptureMode")
+        bubbleStateMachine.dispatch(BubbleEvent.DoubleTap)
+    }
+
+    /**
+     * 处理单击事件（根据当前状态决定行为）
+     */
+    fun handleSingleTap() {
+        val currentState = bubbleStateMachine.currentState
+        AppDebugLogStore.i(tag, "handleSingleTap state=${currentState::class.simpleName}")
+        
+        when (currentState) {
+            is BubbleState.MultiPageCapture -> {
+                // 多页截图模式下，单击截图
+                capturePage()
+            }
+            is BubbleState.MultiPageCapturing -> {
+                // 正在截图中，忽略单击
+                AppDebugLogStore.i(tag, "handleSingleTap ignored, capturing in progress")
+            }
+            is BubbleState.MultiPageCaptureSuccess -> {
+                // 截图成功显示中，忽略单击
+                AppDebugLogStore.i(tag, "handleSingleTap ignored, showing capture success")
+            }
+            is BubbleState.Copied -> {
+                // 已复制状态下，单击重置
+                bubbleStateMachine.dispatch(BubbleEvent.SingleTap)
+            }
+            else -> {
+                // 其他状态（Idle、ShowingLetters、Processing 等），打开裁剪页面
+                openCropSheet()
+            }
+        }
+    }
+
+    /**
+     * 处理长按事件（根据当前状态决定行为）
+     */
+    fun handleLongPress() {
+        val currentState = bubbleStateMachine.currentState
+        val launchMode = _uiState.value.launchMode
+        AppDebugLogStore.i(tag, "handleLongPress state=${currentState::class.simpleName} launchMode=$launchMode")
+        
+        when {
+            // 普通模式下长按，打开主页面
+            launchMode == OverlayLaunchMode.NORMAL -> {
+                `fun`.kirari.hanako.overlay.openMainActivity(appContext)
+            }
+            // 自动模式下，Idle 或 ShowingLetters 状态长按，进入多页截图模式
+            launchMode == OverlayLaunchMode.AUTO && (currentState is BubbleState.Idle || currentState is BubbleState.ShowingLetters) -> {
+                enterMultiPageCaptureMode()
+            }
+            // 多页截图模式下，长按发送截图
+            currentState is BubbleState.MultiPageCapture -> {
+                AppDebugLogStore.i(tag, "handleLongPress MultiPageCapture bitmaps=${currentState.capturedBitmaps.size}")
+                if (currentState.capturedBitmaps.isNotEmpty()) {
+                    sendCaptures()
+                }
+            }
+            currentState is BubbleState.MultiPageCapturing -> {
+                AppDebugLogStore.i(tag, "handleLongPress MultiPageCapturing bitmaps=${currentState.capturedBitmaps.size}")
+                if (currentState.capturedBitmaps.isNotEmpty()) {
+                    sendCaptures()
+                }
+            }
+            currentState is BubbleState.MultiPageCaptureSuccess -> {
+                AppDebugLogStore.i(tag, "handleLongPress MultiPageCaptureSuccess bitmaps=${currentState.capturedBitmaps.size}")
+                if (currentState.capturedBitmaps.isNotEmpty()) {
+                    sendCaptures()
+                }
+            }
+        }
+    }
+
+    /**
+     * 处理双击事件
+     */
+    fun handleDoubleTap() {
+        val currentState = bubbleStateMachine.currentState
+        AppDebugLogStore.i(tag, "handleDoubleTap state=${currentState::class.simpleName}")
+        
+        when (currentState) {
+            is BubbleState.MultiPageCapture,
+            is BubbleState.MultiPageCapturing,
+            is BubbleState.MultiPageCaptureSuccess -> {
+                exitMultiPageCaptureMode()
+            }
+            else -> {}
         }
     }
 
@@ -291,14 +476,20 @@ internal class OverlayViewModel(
     }
 
     private suspend fun processAutoBitmap(bitmap: Bitmap) {
+        processAutoBitmaps(listOf(bitmap))
+    }
+
+    private suspend fun processAutoBitmaps(bitmaps: List<Bitmap>) {
         val state = _uiState.value
-        AppDebugLogStore.i(tag, "processAutoBitmap start route=${state.settings.processingRoute} bitmap=${bitmap.width}x${bitmap.height}")
+        val firstBitmap = bitmaps.firstOrNull() ?: return
+        AppDebugLogStore.i(tag, "processAutoBitmaps start route=${state.settings.processingRoute} bitmapCount=${bitmaps.size}")
 
         val models = runCatching { pipeline.resolveModels(state) }.getOrElse { error ->
             _uiState.update { it.copy(working = false, autoRunState = AutoRunState.IDLE, error = error.message) }
+            bubbleStateMachine.forceState(BubbleState.Idle)
             return
         }
-        val (baseResult, historyId, screenshotPath) = pipeline.createBaseResult(models, bitmap, "自动流程已开始")
+        val (baseResult, historyId, screenshotPaths) = pipeline.createBaseResult(models, bitmaps, "自动流程已开始")
         upsertHistory(baseResult)
 
         runCatching<Pair<`fun`.kirari.hanako.data.AutomationActionRecord, ProcessingResult>> {
@@ -308,7 +499,7 @@ internal class OverlayViewModel(
                         pipeline.validateOcrThenLlmModels(models)
                         val (ocrText, automationResult) = pipeline.streamOcrThenAutomation(
                             models = models,
-                            bitmap = bitmap,
+                            bitmaps = bitmaps,
                             onOcrDelta = { delta ->
                                 _uiState.update { current -> current.copy(liveOcrText = current.liveOcrText + delta) }
                             },
@@ -316,46 +507,60 @@ internal class OverlayViewModel(
                                 _uiState.update { current -> current.copy(liveAnswerText = current.liveAnswerText + delta) }
                             }
                         )
-                        pipeline.buildAutomationResult(baseResult, models, ocrText, automationResult, historyId, screenshotPath)
+                        pipeline.buildAutomationResult(baseResult, models, ocrText, automationResult, historyId, screenshotPaths)
                     }
 
                     ProcessingRoute.MULTIMODAL_DIRECT -> {
                         pipeline.validateVisionModels(models)
                         val automationResult = pipeline.streamAutomationDirect(
                             models = models,
-                            bitmap = bitmap,
+                            bitmaps = bitmaps,
                             onThoughtDelta = { delta ->
                                 _uiState.update { current -> current.copy(liveAnswerText = current.liveAnswerText + delta) }
                             }
                         )
-                        pipeline.buildAutomationResult(baseResult, models, "", automationResult, historyId, screenshotPath)
+                        pipeline.buildAutomationResult(baseResult, models, "", automationResult, historyId, screenshotPaths)
                     }
                 }
-                AppDebugLogStore.i(tag, "processAutoBitmap gateway success resultId=${result.id} action=${action.type}")
+                AppDebugLogStore.i(tag, "processAutoBitmaps gateway success resultId=${result.id} action=${action.type}")
                 upsertHistory(result)
                 action to result
             }
         }.onSuccess { (action, result) ->
-            val bubbleState = when (action.type) {
-                AutomationActionType.SET_CLIPBOARD -> `fun`.kirari.hanako.automation.BubbleDisplayState.COPIED
-                AutomationActionType.SHOW_BUBBLE_LETTERS -> `fun`.kirari.hanako.automation.BubbleDisplayState.SHOWING_LETTERS
-            }
-            _uiState.update {
-                it.copy(
-                    screenshot = bitmap,
-                    selectedBitmap = bitmap,
-                    working = false,
-                    result = result,
-                    liveAnswerText = result.automationThought,
-                    autoRunState = AutoRunState.COMPLETED,
-                    autoCopiedLabel = action.text.takeIf { action.type == AutomationActionType.SET_CLIPBOARD },
-                    bubbleDisplayState = bubbleState,
-                    bubbleLetters = action.text.takeIf { action.type == AutomationActionType.SHOW_BUBBLE_LETTERS },
-                    error = null
-                )
+            when (action.type) {
+                AutomationActionType.SET_CLIPBOARD -> {
+                    _uiState.update {
+                        it.copy(
+                            screenshot = firstBitmap,
+                            selectedBitmap = firstBitmap,
+                            working = false,
+                            result = result,
+                            liveAnswerText = result.automationThought,
+                            autoRunState = AutoRunState.COMPLETED,
+                            autoCopiedLabel = action.text,
+                            error = null
+                        )
+                    }
+                    bubbleStateMachine.dispatch(BubbleEvent.CopyComplete(action.text))
+                }
+                AutomationActionType.SHOW_BUBBLE_LETTERS -> {
+                    _uiState.update {
+                        it.copy(
+                            screenshot = firstBitmap,
+                            selectedBitmap = firstBitmap,
+                            working = false,
+                            result = result,
+                            liveAnswerText = result.automationThought,
+                            autoRunState = AutoRunState.COMPLETED,
+                            autoCopiedLabel = null,
+                            error = null
+                        )
+                    }
+                    bubbleStateMachine.dispatch(BubbleEvent.LettersComplete(action.text))
+                }
             }
         }.onFailure { error ->
-            AppDebugLogStore.e(tag, "processAutoBitmap failed", error)
+            AppDebugLogStore.e(tag, "processAutoBitmaps failed", error)
             handleError(error, baseResult, isAutoMode = true)
         }
     }
@@ -380,10 +585,11 @@ internal class OverlayViewModel(
             it.copy(
                 working = false,
                 autoRunState = AutoRunState.IDLE,
-                bubbleDisplayState = if (isAutoMode) `fun`.kirari.hanako.automation.BubbleDisplayState.IDLE else it.bubbleDisplayState,
-                bubbleLetters = if (isAutoMode) null else it.bubbleLetters,
                 error = message
             )
+        }
+        if (isAutoMode) {
+            bubbleStateMachine.forceState(BubbleState.Idle)
         }
     }
 

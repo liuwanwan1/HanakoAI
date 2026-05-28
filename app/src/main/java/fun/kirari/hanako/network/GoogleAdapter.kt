@@ -33,11 +33,11 @@ internal class GoogleAdapter(
                     put("role", "user")
                     put("parts", buildJsonArray {
                         add(buildJsonObject { put("text", request.userPrompt) })
-                        request.imageBase64?.let {
+                        request.imagesBase64.forEach { imageBase64 ->
                             add(buildJsonObject {
                                 put("inlineData", buildJsonObject {
                                     put("mimeType", "image/jpeg")
-                                    put("data", it)
+                                    put("data", imageBase64)
                                 })
                             })
                         }

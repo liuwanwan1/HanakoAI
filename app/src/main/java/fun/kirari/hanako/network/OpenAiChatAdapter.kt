@@ -30,7 +30,7 @@ internal class OpenAiChatAdapter(
                 add(openAiMessage("system", request.systemPrompt))
                 add(buildJsonObject {
                     put("role", "user")
-                    if (request.imageBase64 == null) {
+                    if (!request.hasImages) {
                         put("content", request.userPrompt)
                     } else {
                         put("content", buildJsonArray {
@@ -38,13 +38,15 @@ internal class OpenAiChatAdapter(
                                 put("type", "text")
                                 put("text", request.userPrompt)
                             })
-                            add(buildJsonObject {
-                                put("type", "image_url")
-                                put("image_url", buildJsonObject {
-                                    put("url", "data:image/jpeg;base64,${request.imageBase64}")
-                                    put("detail", "high")
+                            request.imagesBase64.forEach { imageBase64 ->
+                                add(buildJsonObject {
+                                    put("type", "image_url")
+                                    put("image_url", buildJsonObject {
+                                        put("url", "data:image/jpeg;base64,$imageBase64")
+                                        put("detail", "high")
+                                    })
                                 })
-                            })
+                            }
                         })
                     }
                 })
