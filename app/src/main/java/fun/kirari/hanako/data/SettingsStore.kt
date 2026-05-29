@@ -31,8 +31,8 @@ class SettingsStore(private val context: Context) {
             }
         }
         .flatMapConcat { appSettings ->
-            val migrated = migrateHistoryImages(appSettings)
-            if (migrated !== appSettings) {
+            val migrated = migrateHistoryImages(context, appSettings)
+            if (migrated != appSettings) {
                 flow {
                     persistMigrated(migrated)
                     emit(migrated)
@@ -68,21 +68,16 @@ class SettingsStore(private val context: Context) {
     companion object {
         private val SETTINGS_KEY = stringPreferencesKey("app_settings")
 
-        private fun migrateHistoryImages(settings: AppSettings): AppSettings {
-            val needsMigration = settings.history.any { it.screenshotBase64 != null && it.screenshotPath == null }
+        private fun migrateHistoryImages(context: Context, settings: AppSettings): AppSettings {
+            val needsMigration = settings.history.any { it.screenshotBase64 != null && it.screenshotPath == null } ||
+                (settings.lastResult?.let { it.screenshotBase64 != null && it.screenshotPath == null } == true)
             if (!needsMigration) return settings
 
             val migratedHistory = settings.history.map { result ->
-                migrateBase64ToFile(result)
+                migrateBase64ToFile(context, result)
             }
-            val migratedLastResult = settings.lastResult?.let { migrateBase64ToFile(it) }
+            val migratedLastResult = settings.lastResult?.let { migrateBase64ToFile(context, it) }
             return settings.copy(history = migratedHistory, lastResult = migratedLastResult)
-        }
-
-        private fun migrateBase64ToFile(result: ProcessingResult): ProcessingResult {
-            if (result.screenshotPath != null) return result
-            val base64 = result.screenshotBase64 ?: return result
-            return result.copy(screenshotBase64 = null)
         }
     }
 }
